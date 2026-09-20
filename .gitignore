@@ -1,0 +1,19 @@
+# generated task sets (deterministic; regenerate with the command in README.md)
+out/
+/tmp/
+
+# the tau2-bench clone lives here, never committed
+upstream/
+
+# secrets
+.env
+.env.*
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# os
+.DS_Store

@@ -1,0 +1,21 @@
+tau2-gen
+Copyright (c) 2026 Allan (@catoneone)
+
+This project generates tasks for, and is built against, tau2-bench:
+
+    tau2-bench — https://github.com/sierra-research/tau2-bench
+    MIT License
+    Copyright (c) 2025 Sierra Research
+
+tau2-gen does not vendor tau2-bench; it is cloned separately at install time and
+used as a library (its telecom environment, tools, policy documents, user
+simulator and scorer). The telecom fault definitions in
+`domains/telecom/gen.py` follow the structure of tau2-bench's own programmatic
+task pipeline (`tau2.domains.telecom.tasks`), re-implemented so that each task
+can carry its own generated database.
+
+`patches/0001-set_state-keep-separate-user-db.patch` is a modification of
+tau2-bench source, applied to a local clone and not redistributed here.
+
+No tau2-bench task data is copied into generated task sets. See "Not copying the
+benchmark" in README.md.
