@@ -1,0 +1,239 @@
+{
+  "type": "Tau2Task",
+  "data": {
+    "idx": 0,
+    "name": "[cancel_denied_flown][PERSONA:None][GEN:7-00000]",
+    "description": "Purpose: cancel denied flown",
+    "prompt": "Hi! How can I help you today?",
+    "network_allow": [
+      "*"
+    ],
+    "network_block": [],
+    "artifacts": [],
+    "timeout": {},
+    "resources": {},
+    "id": "[cancel_denied_flown][PERSONA:None][GEN:7-00000]",
+    "user_scenario": {
+      "persona": null,
+      "instructions": {
+        "domain": "airline",
+        "reason_for_call": "You want to cancel reservation ZLGMXG.",
+        "known_info": "You are Bram Iqbal. Your user id is bram_iqbal_15908.",
+        "unknown_info": null,
+        "task_instructions": "You are polite but persistent. If the agent tells you the reservation cannot be cancelled, ask once whether anything can be done, then accept the answer."
+      }
+    },
+    "ticket": null,
+    "initial_state": {
+      "initialization_data": {
+        "agent_data": {
+          "flights": {
+            "NVA660": {
+              "flight_number": "NVA660",
+              "origin": "PHX",
+              "destination": "DEN",
+              "scheduled_departure_time_est": "07:00:00",
+              "scheduled_arrival_time_est": "12:15:00",
+              "dates": {
+                "2024-05-04": {
+                  "status": "landed",
+                  "actual_departure_time_est": "2024-05-04T07:00:00",
+                  "actual_arrival_time_est": "2024-05-04T12:15:00"
+                }
+              }
+            },
+            "NVA576": {
+              "flight_number": "NVA576",
+              "origin": "DEN",
+              "destination": "PHX",
+              "scheduled_departure_time_est": "19:30:00",
+              "scheduled_arrival_time_est": "22:15:00",
+              "dates": {
+                "2024-05-21": {
+                  "status": "available",
+                  "available_seats": {
+                    "basic_economy": 3,
+                    "economy": 10,
+                    "business": 17
+                  },
+                  "prices": {
+                    "basic_economy": 105.0,
+                    "economy": 156.0,
+                    "business": 529.0
+                  }
+                }
+              }
+            }
+          },
+          "users": {
+            "bram_iqbal_15908": {
+              "user_id": "bram_iqbal_15908",
+              "name": {
+                "first_name": "Bram",
+                "last_name": "Iqbal"
+              },
+              "address": {
+                "address1": "55 Birch Hollow",
+                "address2": "Suite 979",
+                "city": "Ann Arbor",
+                "country": "USA",
+                "state": "MI",
+                "zip": "48104"
+              },
+              "email": "bram.iqbal2281@example.net",
+              "dob": "1968-07-05",
+              "payment_methods": {
+                "credit_card_01661318": {
+                  "source": "credit_card",
+                  "id": "credit_card_01661318",
+                  "brand": "mastercard",
+                  "last_four": "0913"
+                },
+                "gift_card_90996030": {
+                  "source": "gift_card",
+                  "id": "gift_card_90996030",
+                  "amount": 250.0
+                }
+              },
+              "saved_passengers": [],
+              "membership": "regular",
+              "reservations": [
+                "ZLGMXG"
+              ]
+            }
+          },
+          "reservations": {
+            "ZLGMXG": {
+              "reservation_id": "ZLGMXG",
+              "user_id": "bram_iqbal_15908",
+              "origin": "PHX",
+              "destination": "DEN",
+              "flight_type": "round_trip",
+              "cabin": "business",
+              "flights": [
+                {
+                  "origin": "PHX",
+                  "destination": "DEN",
+                  "flight_number": "NVA660",
+                  "date": "2024-05-04",
+                  "price": 601.0
+                },
+                {
+                  "origin": "DEN",
+                  "destination": "PHX",
+                  "flight_number": "NVA576",
+                  "date": "2024-05-21",
+                  "price": 786.0
+                }
+              ],
+              "passengers": [
+                {
+                  "first_name": "Bram",
+                  "last_name": "Iqbal",
+                  "dob": "1968-07-05"
+                },
+                {
+                  "first_name": "Ravi",
+                  "last_name": "Vasquez",
+                  "dob": "1996-08-10"
+                },
+                {
+                  "first_name": "Tomas",
+                  "last_name": "Eriksen",
+                  "dob": "1957-09-14"
+                }
+              ],
+              "payment_history": [
+                {
+                  "payment_id": "credit_card_01661318",
+                  "amount": 4161
+                }
+              ],
+              "created_at": "2024-05-02T14:00:00",
+              "total_baggages": 0,
+              "nonfree_baggages": 0,
+              "insurance": "yes"
+            }
+          }
+        },
+        "user_data": null
+      },
+      "initialization_actions": null,
+      "message_history": null
+    },
+    "evaluation_criteria": {
+      "actions": [
+        {
+          "action_id": "get_user_details_0",
+          "requestor": "assistant",
+          "name": "get_user_details",
+          "arguments": {
+            "user_id": "bram_iqbal_15908"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "get_reservation_details_1",
+          "requestor": "assistant",
+          "name": "get_reservation_details",
+          "arguments": {
+            "reservation_id": "ZLGMXG"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "get_flight_status_2",
+          "requestor": "assistant",
+          "name": "get_flight_status",
+          "arguments": {
+            "flight_number": "NVA660",
+            "date": "2024-05-04"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "get_flight_status_3",
+          "requestor": "assistant",
+          "name": "get_flight_status",
+          "arguments": {
+            "flight_number": "NVA576",
+            "date": "2024-05-21"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "transfer_to_human_agents_4",
+          "requestor": "assistant",
+          "name": "transfer_to_human_agents",
+          "arguments": {
+            "summary": "Part of reservation ZLGMXG has already been flown; cancellation needs a human agent."
+          },
+          "info": null,
+          "compare_args": null
+        }
+      ],
+      "env_assertions": null,
+      "communicate_info": null,
+      "nl_assertions": [
+        "Agent should not cancel the reservation because part of it has already been flown, and should transfer to a human agent.",
+        "Agent should transfer the user to a human agent."
+      ],
+      "reward_basis": [
+        "DB",
+        "COMMUNICATE"
+      ]
+    },
+    "domain": "airline",
+    "tau_description": {
+      "purpose": "cancel denied flown",
+      "relevant_policies": null,
+      "notes": null
+    }
+  },
+  "key": "b2ff65dbfceec5ec9d58c5e37f36393c37b5bfd24f2cf889dba4bdb50f91cf09",
+  "hash": "b2ff65dbfceec5ec9d58c5e37f36393c37b5bfd24f2cf889dba4bdb50f91cf09"
+}

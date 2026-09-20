@@ -198,34 +198,57 @@ def make_instance(rng: random.Random, n_fillers: tuple[int, int] = (2, 4)) -> di
     return {"db": b.db, "target": target}
 
 
-# ---- 标识符抽取（泄漏检查用）----
+# ---- identifier extraction (leakage checking) ----
 RE_PHONE = re.compile(r"\b\d{3}-\d{3}-\d{4}\b")
-RE_ID = re.compile(r"\b[A-Z]\d{4,}\b")
 RE_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 RE_IMEI = re.compile(r"\b\d{15}\b")
 
+# Fields whose values identify a record. Matching on field names rather than on shapes keeps product
+# names and other free text out of the comparison, and catches bare-numeric ids that no regex would.
+ID_FIELDS = {
+    "user_id", "customer_id", "order_id", "product_id", "item_id", "reservation_id", "flight_number",
+    "line_id", "bill_id", "device_id", "plan_id", "payment_id", "payment_method_id", "tracking_id", "imei",
+}
+# Fields holding a person's name. `name` alone is excluded: in retail it is the product name.
+PERSON_NAME_FIELDS = {"full_name"}
+RE_NAME_IN_TEXT = [
+    re.compile(r"You are ([A-Z][\w'-]+ [A-Z][\w'-]+)"),
+    re.compile(r"Customer name: ([A-Z][\w'-]+ [A-Z][\w'-]+)"),
+]
+
 
 def identifiers(obj: Any) -> dict[str, set[str]]:
+    """Identifiers reachable in `obj`, bucketed. Used to prove a generated set shares none with a
+    reference set."""
     out: dict[str, set[str]] = {"phones": set(), "ids": set(), "emails": set(), "imeis": set(), "names": set()}
+
+    def add_id(v):
+        if isinstance(v, str) and v.strip():
+            out["ids"].add(v)
+        elif isinstance(v, list):
+            for x in v:
+                add_id(x)
 
     def walk(x, key=None):
         if isinstance(x, dict):
+            # a {"first_name": ..., "last_name": ...} pair is a person
+            if "first_name" in x and "last_name" in x:
+                out["names"].add(f"{x['first_name']} {x['last_name']}")
             for k, v in x.items():
+                if k in ID_FIELDS:
+                    add_id(v)
+                elif k in PERSON_NAME_FIELDS and isinstance(v, str):
+                    out["names"].add(v)
                 walk(v, k)
         elif isinstance(x, list):
             for v in x:
                 walk(v, key)
         elif isinstance(x, str):
             out["phones"].update(RE_PHONE.findall(x))
-            out["ids"].update(RE_ID.findall(x))
             out["emails"].update(RE_EMAIL.findall(x))
             out["imeis"].update(RE_IMEI.findall(x))
-            if key in ("full_name", "name") and re.fullmatch(r"[A-Z][\w'-]+ [A-Z][\w'-]+", x):
-                out["names"].add(x)
-            for m in re.findall(r"You are ([A-Z][\w'-]+ [A-Z][\w'-]+) with", x):
-                out["names"].add(m)
-            for m in re.findall(r"Customer name: ([A-Z][\w'-]+ [A-Z][\w'-]+),", x):
-                out["names"].add(m)
+            for rx in RE_NAME_IN_TEXT:
+                out["names"].update(rx.findall(x))
 
     walk(obj)
     return out

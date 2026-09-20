@@ -32,10 +32,14 @@ def main() -> None:
     ap.add_argument("--tasks", required=True, help="tasks_tau2.json (a list of native tau2 Tasks)")
     ap.add_argument("--agent-model", required=True, help="model name as the endpoint expects it")
     ap.add_argument("--agent-api-base", default="http://127.0.0.1:8000/v1")
-    ap.add_argument("--agent-api-key", default=os.environ.get("VLLM_API_KEY", "EMPTY"))
+    ap.add_argument("--agent-api-key-var", default="VLLM_API_KEY",
+                    help="env var holding the agent-side key; the key itself is never passed on the command line")
     ap.add_argument("--agent-temperature", type=float, default=0.7, help="must be > 0 for k trials to differ")
     ap.add_argument("--agent-max-tokens", type=int, default=8192)
     ap.add_argument("--user-llm", default="gpt-4.1")
+    ap.add_argument("--user-api-base", default=None, help="OpenAI-compatible base for the user simulator")
+    ap.add_argument("--user-api-key-var", default="OPENAI_API_KEY", help="env var holding the user-side key")
+    ap.add_argument("--domain", default="telecom", choices=["telecom", "airline", "retail"])
     ap.add_argument("--trials", type=int, default=3)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--max-steps", type=int, default=200)
@@ -49,19 +53,27 @@ def main() -> None:
 
     load_dotenv()  # OPENAI_API_KEY comes from .env only, which is gitignored
     from tau2.data_model.simulation import TextRunConfig
-    from tau2.domains.telecom.environment import load_tasks
     from tau2.runner import run_tasks
+    from tau2.utils import load_file
 
-    tasks = load_tasks(a.tasks)
+    from common import schema  # noqa: F401  (kept for symmetry with the rest of the toolchain)
+
+    raw = load_file(a.tasks)
+    from tau2.data_model.tasks import Task
+
+    tasks = [Task.model_validate(t) for t in (raw["tasks"] if isinstance(raw, dict) and "tasks" in raw else raw)]
     if a.task_ids:
         tasks = [t for t in tasks if t.id in set(a.task_ids)]
     if a.num_tasks:
         tasks = tasks[: a.num_tasks]
+    user_args = {"temperature": 0.0}
+    if a.user_api_base:
+        user_args |= {"api_base": a.user_api_base, "api_key": os.environ.get(a.user_api_key_var, "EMPTY")}
     cfg = TextRunConfig(
-        domain="telecom",
+        domain=a.domain,
         llm_agent=f"openai/{a.agent_model}",
-        llm_args_agent={"temperature": a.agent_temperature, "max_tokens": a.agent_max_tokens, "api_base": a.agent_api_base, "api_key": a.agent_api_key},
-        llm_user=a.user_llm,
+        llm_args_agent={"temperature": a.agent_temperature, "max_tokens": a.agent_max_tokens, "api_base": a.agent_api_base, "api_key": os.environ.get(a.agent_api_key_var, "EMPTY")},
+        llm_user=a.user_llm, llm_args_user=user_args,
         num_trials=a.trials, max_concurrency=a.concurrency, max_steps=a.max_steps, seed=a.seed,
     )
     Path(a.save_to).parent.mkdir(parents=True, exist_ok=True)

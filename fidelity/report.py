@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from fidelity import leakage  # noqa: E402
+from common.tau2_compat import domain_data  # noqa: E402
 from fidelity.taxonomy import analyze, load, n_faults, persona_of, sampled, task_category  # noqa: E402
 
 # Acceptance thresholds. Reference values themselves come from --bench-traces; nothing is hardcoded.
@@ -44,14 +45,41 @@ def task_stats(datas: list[dict]) -> dict:
     kf = Counter(n_faults(d.get("name")) for d in datas)
     nact = [len((d.get("evaluation_criteria") or {}).get("actions") or []) for d in datas]
     unfix = sum(1 for d in datas if any(a.get("name") == "transfer_to_human_agents" for a in (d.get("evaluation_criteria") or {}).get("actions") or []))
+    READS = {"get_user_details", "get_reservation_details", "search_direct_flight", "search_onestop_flight",
+             "list_all_airports", "get_flight_status", "calculate", "find_user_id_by_email",
+             "find_user_id_by_name_zip", "get_order_details", "get_product_details", "get_item_details",
+             "list_all_product_types", "transfer_to_human_agents"}
+    nwrite = [len([a for a in ((d.get("evaluation_criteria") or {}).get("actions") or []) if a.get("name") not in READS])
+              for d in datas]
+    no_write = sum(1 for k in nwrite if k == 0)
     basis = Counter("|".join((d.get("evaluation_criteria") or {}).get("reward_basis") or []) for d in datas)
     afn = Counter(a["func_name"] for d in datas for a in (d.get("evaluation_criteria") or {}).get("env_assertions") or [])
     ifn = Counter(a["func_name"] for d in datas for a in (d.get("initial_state") or {}).get("initialization_actions") or [])
     with_db = sum(1 for d in datas if ((d.get("initial_state") or {}).get("initialization_data") or {}).get("agent_data"))
     return {"n": n, "intents": pct(intents, n), "personas": pct(personas, n), "n_faults": pct(kf, n),
             "expected_actions_min_med_max": (min(nact), sorted(nact)[len(nact) // 2], max(nact)) if nact else None,
+            "write_actions_min_med_max": (min(nwrite), sorted(nwrite)[len(nwrite) // 2], max(nwrite)) if nwrite else None,
+            "no_write_tasks": f"{no_write} ({100 * no_write / max(1, n):.0f}%)",
             "unfixable": f"{unfix} ({100 * unfix / max(1, n):.0f}%)", "reward_basis": dict(basis),
             "assertion_funcs": dict(afn.most_common()), "init_funcs": dict(ifn.most_common()), "with_initialization_data": with_db}
+
+
+def load_bench_tasks(domain: str, split: str = "base") -> list[dict]:
+    """tau2-bench's own task file for a domain, restricted to a split, shaped like our task payloads
+    so the same task-level statistics apply. Used as the reference column for airline and retail,
+    which ship hand-written tasks rather than rollout traces."""
+    data = domain_data(domain)
+    tasks = json.loads((data / "tasks.json").read_text())
+    sp = data / "split_tasks.json"
+    if sp.exists():
+        ids = set(json.loads(sp.read_text()).get(split, []))
+        tasks = [t for t in tasks if t["id"] in ids]
+    out = []
+    for t in tasks:
+        d = dict(t)
+        d["name"] = t["id"]
+        out.append(d)
+    return out
 
 
 def ref_usability(rows: list[dict]) -> dict:
@@ -77,18 +105,25 @@ def row(name, gen, bench, thr, ok):
     return f"| {name} | {gen} | {bench} | {thr} | {mark} |"
 
 
-def build_report(gen_records: list[dict], bench_rows: list[dict] | None, gen_rows: list[dict] | None, bench_traces: list[str] | None) -> tuple[str, bool]:
-    L = ["# tau2-gen telecom - fidelity report", ""]
+def build_report(gen_records: list[dict], bench_rows: list[dict] | None, gen_rows: list[dict] | None,
+                 bench_traces: list[str] | None, bench_tasks: list[dict] | None = None,
+                 domain: str = "telecom", split: str = "base") -> tuple[str, bool]:
+    L = [f"# tau2-gen {domain} - fidelity report", ""]
     gen_datas = [r["data"] for r in gen_records]
     gs = task_stats(gen_datas)
-    bs = task_stats([r["task"]["data"] for r in bench_rows]) if bench_rows else None
+    bs = None
+    if bench_rows:
+        bs = task_stats([r["task"]["data"] for r in bench_rows])
+    elif bench_tasks:
+        bs = task_stats(bench_tasks)
     L += ["## Task level", "", "| metric | generated | reference |", "|---|---|---|"]
-    for k in ("n", "intents", "personas", "n_faults", "expected_actions_min_med_max", "unfixable", "reward_basis", "assertion_funcs", "init_funcs", "with_initialization_data"):
+    for k in ("n", "intents", "personas", "n_faults", "expected_actions_min_med_max",
+              "write_actions_min_med_max", "no_write_tasks", "unfixable", "reward_basis", "assertion_funcs", "init_funcs", "with_initialization_data"):
         L.append(f"| {k} | {gs[k]} | {bs[k] if bs else DASH} |")
     L.append("")
     all_ok = True
     L += ["## Leakage", ""]
-    lk = leakage.check(gen_records, bench_traces)
+    lk = leakage.check(gen_records, bench_traces, domain=domain, split=split)
     all_ok &= lk["ok"]
     counts = {k: len(v) for k, v in lk["overlap"].items()}
     L.append(f"- Result: **{'PASS' if lk['ok'] else 'FAIL'}**. Identifier overlap {counts}. Held-out task-id overlap {len(lk['task_id_overlap'])} (out of {lk['heldout_task_ids']} held-out tasks).")
@@ -161,12 +196,17 @@ def main() -> None:
     ap.add_argument("--gen-tasks", required=True)
     ap.add_argument("--gen-traces", nargs="*", default=None)
     ap.add_argument("--bench-traces", nargs="*", default=None)
+    ap.add_argument("--bench-tasks", action="store_true",
+                    help="use tau2-bench's own task file as the reference (airline and retail ship tasks, not traces)")
+    ap.add_argument("--domain", default="telecom", choices=["telecom", "airline", "retail"])
+    ap.add_argument("--split", default="base")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     gen_records = leakage.load_jsonl(a.gen_tasks)
     bench_rows = [r for f in a.bench_traces for r in load(f)] if a.bench_traces else None
     gen_rows = [r for f in a.gen_traces for r in load(f)] if a.gen_traces else None
-    md, ok = build_report(gen_records, bench_rows, gen_rows, a.bench_traces)
+    bench_tasks = load_bench_tasks(a.domain, a.split) if a.bench_tasks else None
+    md, ok = build_report(gen_records, bench_rows, gen_rows, a.bench_traces, bench_tasks, a.domain, a.split)
     print(md)
     if a.out:
         Path(a.out).write_text(md)

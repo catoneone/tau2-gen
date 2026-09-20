@@ -12,7 +12,7 @@ replaces only the part that makes tasks: **the scenarios and the databases they 
 sets with the same shape as the benchmark, the same schema, and no overlap with it, so the benchmark
 stays usable as a held-out evaluation while the generated set is free to be trained on.
 
-Status: **telecom works** and is verified end to end. Retail and airline are specified but not built.
+Status: **all three domains work** — telecom, airline and retail — each verified end to end.
 
 ## Why
 
@@ -31,6 +31,50 @@ The situations worth generating are the ones where a model has to ask instead of
 
 Roughly a fifth of generated tasks have no correct write action at all: the right answer is to explain
 and escalate. That ratio is taken from the benchmark rather than chosen.
+
+## The three domains
+
+They are not variations on one generator. tau2-bench builds telecom programmatically from atomic device
+faults, and writes airline and retail by hand, so only telecom had a pipeline to adapt. The other two are
+derived from their policy documents instead. They are also scored differently, which decides what can be
+checked offline:
+
+| | how tasks are made here | `reward_basis` | offline verification |
+|---|---|---|---|
+| telecom | fault table composed with repair-order dependencies, following upstream's own pipeline | `ENV_ASSERTION` | replay, then assert device state |
+| airline | policy compiled into `rules.yaml`, cases built to land on one side of one rule | `DB, COMMUNICATE` | replay, then compare database hashes |
+| retail | order lifecycle crossed with preconditions from the policy | `DB, NL_ASSERTION` | replay, then compare database hashes |
+
+Retail's basis contains an LLM-judged component, but an empty assertion list scores 1.0 without calling a
+judge, and 74 of the benchmark's own 114 retail tasks carry no assertions either. Generated retail tasks
+follow that: the database check is what gates, so nothing here needs an API key to verify.
+
+### Airline: the policy as a rule table
+
+[`domains/airline/rules.yaml`](domains/airline/rules.yaml) encodes each clause of the policy document
+with a citation, and [`rules.py`](domains/airline/rules.py) applies it to a concrete reservation. Every
+decision carries the reason it was reached, which becomes the task's natural-language assertion.
+
+The table is held to the benchmark's own 50 tasks by
+[`test_rules.py`](domains/airline/test_rules.py), which checks the direction the policy states
+unconditionally. Every reservation a benchmark task cancels must be eligible; every flight change must be
+permitted; every certificate amount must match; and a reservation with a flown segment must always be
+refused. The converse is not asserted, because a task may leave an eligible reservation alone simply
+because the user asked about a different one.
+
+```
+airline rules vs 50 benchmark tasks and 200 flown reservations
+  baggage_nonfree:pass               5
+  cabin_change_eligible:pass        17
+  cancel_eligible:pass              11
+  flight_change_eligible:pass        3
+  flown_blocks_cancel:pass         200
+  flown_blocks_change:pass         200
+
+all checks passed
+```
+
+Those 50 tasks are fixtures. They are read to test the table and never written into a generated set.
 
 ## Install
 
@@ -64,16 +108,27 @@ P=upstream/tau2-bench/.venv/bin/python
 # 1. Extract the shape to match, and the list of tasks to stay clear of.
 $P fidelity/bench_profile.py --from-tau2 --split base --out domains/telecom/bench_profile.json
 
-# 2. Generate. Deterministic: same seed, same 200 tasks, about a second.
+# 2. Generate. Deterministic: same seed, same tasks.
 $P domains/telecom/gen.py --n 200 --seed 0 --out out/telecom
+$P domains/airline/gen.py --n 150 --seed 0 --out out/airline
+$P domains/retail/gen.py  --n 150 --seed 0 --out out/retail
 
-# 3. Check the result against the benchmark's shape.
-$P fidelity/report.py --gen-tasks out/telecom/tasks.jsonl --out out/telecom/fidelity_report.md
+# 3. Check each against the benchmark's shape.
+$P fidelity/report.py --gen-tasks out/telecom/tasks.jsonl --domain telecom --out out/telecom/fidelity_report.md
+$P fidelity/report.py --gen-tasks out/airline/tasks.jsonl --domain airline --bench-tasks --out out/airline/fidelity_report.md
+$P fidelity/report.py --gen-tasks out/retail/tasks.jsonl  --domain retail  --bench-tasks --out out/retail/fidelity_report.md
+
+# 4. Hold the airline rule table to the benchmark's own 50 tasks.
+$P domains/airline/test_rules.py
 ```
+
+`--bench-tasks` reads tau2-bench's own task file as the reference column, which is what airline and
+retail ship instead of traces.
 
 Step 2 writes `tasks.jsonl` (flat episode records), `tasks_tau2.json` (native τ² `Task` objects, loadable
 by `tau2 run`), `meta.jsonl`, `manifest.json` and `taskset.toml`. See
-[`examples/sample_task.json`](examples/sample_task.json) for one task in full.
+`examples/` for one task from each domain in full: [telecom](examples/sample_task.json),
+[airline](examples/sample_airline_task.json), [retail](examples/sample_retail_task.json).
 
 ## How the telecom generator works
 
@@ -131,8 +186,10 @@ it will only tell you how many decision points it *would* have harvested.
 
 `fidelity/report.py` compares a generated set against a reference set on two levels.
 
-Task level needs nothing but the task file: intent mix, faults per task, expected actions per task,
-share of escalate-only tasks, reward basis, assertion kinds. A 200-task run against τ²-bench telecom:
+Task level needs nothing but the task file: intent mix, faults per task, expected and write actions per
+task, share of tasks with no correct write, reward basis, assertion kinds.
+
+Telecom, 200 generated against the benchmark's 114:
 
 | metric | generated | τ²-bench telecom |
 |---|---|---|
@@ -142,6 +199,22 @@ share of escalate-only tasks, reward basis, assertion kinds. A 200-task run agai
 | escalate-only tasks | 18 % | 18 % |
 | identifier overlap | 0 | — |
 | held-out task-id overlap | 0 | — |
+
+Airline and retail, 150 generated each:
+
+| metric | airline gen | airline ref | retail gen | retail ref |
+|---|---|---|---|---|
+| expected actions, median | 4 | 2 | 4 | 5 |
+| write actions, median | 1 | 1 | 1 | 1 |
+| tasks with no correct write | 39 % | 48 % | 10 % | 9 % |
+| `reward_basis` | matches | — | matches | — |
+| identifier overlap | 0 | — | 0 | — |
+| held-out task-id overlap | 0 | — | 0 | — |
+
+The share of tasks whose correct answer is to do nothing is a knob, `--refuse-share`, defaulting to the
+reference set's own share. Raise it when the point is training data for refusal rather than a
+distribution match. The one gap left is the tail: the benchmark has tasks with up to five writes, where
+generated tasks stop at two.
 
 Rollout level needs a reference model run over the generated set, and checks that the tasks are actually
 solvable but not trivially so: pass rate inside 0.6–0.85, no category of five or more tasks pinned at 0
@@ -203,6 +276,11 @@ traces, 114 rollouts yield 339 such points.
 | `common/tau2_compat.py` | locating the clone, building an environment over a custom database |
 | `domains/telecom/gen.py` | the telecom generator |
 | `domains/telecom/bench_profile.json` | shape to match plus the exclusion list (generated; commit it) |
+| `domains/airline/rules.yaml` | the airline policy as a rule table, each entry citing its clause |
+| `domains/airline/rules.py` | the rule engine; every decision carries its reason |
+| `domains/airline/test_rules.py` | holds the table to the benchmark's 50 tasks |
+| `domains/airline/db.py`, `gen.py` | airline database deltas and task generator |
+| `domains/retail/db.py`, `gen.py` | retail catalogue, orders and task generator |
 | `fidelity/taxonomy.py` | profile any trace file |
 | `fidelity/bench_profile.py` | build the profile, from the clone or from traces |
 | `fidelity/report.py` | generated vs reference, with verdicts |
@@ -216,11 +294,12 @@ commit, the seed, the distributions and the leakage result.
 
 ## Not done yet
 
-- **Retail and airline.** Retail is order-lifecycle actions crossed with preconditions. Airline needs the
-  policy document turned into a rules table, unit-tested against the benchmark's 50 tasks without those
-  tasks entering any generated set.
-- **A published reference pass rate.** The task-level and leakage checks pass. Whether a given model
-  lands in the 0.6–0.85 band on a generated set is a number you have to produce for your own model.
+- **A published reference pass rate.** Task-level checks, leakage and replay verification pass for all
+  three domains. Whether a given model lands in the 0.6–0.85 band on a generated set is a number you have
+  to produce for your own model, with `scripts/run_teacher.py`.
+- **Long multi-write tasks.** Generated tasks top out at two writes; the benchmark reaches five.
+- **Mid-conversation entry points beyond telecom.** `common/entrypoints.py` is domain-agnostic but has
+  only been exercised on telecom traces.
 
 ## License
 

@@ -15,9 +15,33 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent  # the tau2-gen checkout
 GEN_ROOT = REPO_ROOT  # kept as a separate name: generated output is rooted here
-TAU2_ROOT = Path(os.environ.get("TAU2_ROOT", REPO_ROOT / "upstream" / "tau2-bench"))
+
+
+def _find_tau2() -> Path:
+    """TAU2_ROOT if set, else the nearest `upstream/tau2-bench` at or above this checkout.
+
+    Walking up lets the same file work whether tau2-gen is its own repository or is vendored inside
+    a larger one that keeps its clones at the outer root.
+    """
+    env = os.environ.get("TAU2_ROOT")
+    if env:
+        return Path(env)
+    for d in [REPO_ROOT, *REPO_ROOT.parents]:
+        cand = d / "upstream" / "tau2-bench"
+        if cand.exists():
+            return cand
+    return REPO_ROOT / "upstream" / "tau2-bench"
+
+
+TAU2_ROOT = _find_tau2()
 TAU2_PYTHON = TAU2_ROOT / ".venv" / "bin" / "python"
-TAU2_TELECOM_DATA = TAU2_ROOT / "data" / "tau2" / "domains" / "telecom"
+TAU2_DOMAIN_DATA = TAU2_ROOT / "data" / "tau2" / "domains"
+TAU2_TELECOM_DATA = TAU2_DOMAIN_DATA / "telecom"
+
+
+def domain_data(domain: str) -> Path:
+    """Directory holding one domain's policy, database and task set inside the clone."""
+    return TAU2_DOMAIN_DATA / domain
 
 
 def bootstrap() -> None:

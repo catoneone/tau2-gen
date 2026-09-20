@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.db import identifiers  # noqa: E402
-from common.tau2_compat import TAU2_TELECOM_DATA  # noqa: E402
+from common.tau2_compat import domain_data  # noqa: E402
 
 RE_GEN_SUFFIX = re.compile(r"\[GEN:[^\]]*\]$")
 
@@ -30,24 +30,29 @@ def load_jsonl(p: str | Path) -> list[dict]:
         return [json.loads(l) for l in fh if l.strip()]
 
 
-def benchmark_identifiers(bench_traces: list[str] | None = None) -> tuple[dict[str, set], set[str]]:
+def benchmark_identifiers(bench_traces: list[str] | None = None, domain: str = "telecom",
+                          split: str = "base") -> tuple[dict[str, set], set[str]]:
     import toml
 
+    data = domain_data(domain)
     objs = []
     for fn in ("db.toml", "user_db.toml"):
-        p = TAU2_TELECOM_DATA / fn
+        p = data / fn
         if p.exists():
             objs.append(toml.load(p))
+    p = data / "db.json"
+    if p.exists():
+        objs.append(json.loads(p.read_text()))
     task_ids: set[str] = set()  # held out: the named split plus every task seen in the traces
     full_ids: set[str] = set()  # informational: tau2's full programmatic enumeration
-    tj = TAU2_TELECOM_DATA / "tasks.json"
+    tj = data / "tasks.json"
     if tj.exists():
         tasks = json.loads(tj.read_text())
         objs.append(tasks)
         full_ids.update(t["id"] for t in tasks)
-    sp = TAU2_TELECOM_DATA / "split_tasks.json"
+    sp = data / "split_tasks.json"
     if sp.exists():
-        task_ids.update(json.loads(sp.read_text()).get("base", []))
+        task_ids.update(json.loads(sp.read_text()).get(split, []))
     for f in bench_traces or []:
         for r in load_jsonl(f):
             objs.append(r["task"]); task_ids.add(r["task"]["data"]["id"])
@@ -56,10 +61,11 @@ def benchmark_identifiers(bench_traces: list[str] | None = None) -> tuple[dict[s
     return ids, task_ids
 
 
-def check(gen_records: list[dict], bench_traces: list[str] | None = None, extra: dict | None = None) -> dict:
+def check(gen_records: list[dict], bench_traces: list[str] | None = None, extra: dict | None = None,
+          domain: str = "telecom", split: str = "base") -> dict:
     """extra: the shared db.toml contents in --db-mode shared, where tasks carry no DB of their own."""
     gen_ids = identifiers([r["data"] for r in gen_records] + ([extra] if extra else []))
-    bench_ids, bench_task_ids = benchmark_identifiers(bench_traces)
+    bench_ids, bench_task_ids = benchmark_identifiers(bench_traces, domain, split)
     full_ids = bench_ids.pop("_full_ids")
     overlap = {k: sorted(gen_ids[k] & bench_ids[k]) for k in gen_ids}
     gen_task_ids = {RE_GEN_SUFFIX.sub("", r["data"]["id"]) for r in gen_records}
@@ -81,8 +87,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gen", required=True, help="generated tasks.jsonl (one {type,data,key,hash} per line)")
     ap.add_argument("--bench-traces", nargs="*", default=None)
+    ap.add_argument("--domain", default="telecom", choices=["telecom", "airline", "retail"])
+    ap.add_argument("--split", default="base", help="task split treated as held out")
     a = ap.parse_args()
-    R = check(load_jsonl(a.gen), a.bench_traces)
+    R = check(load_jsonl(a.gen), a.bench_traces, domain=a.domain, split=a.split)
     print(json.dumps(R, indent=1, ensure_ascii=False))
     sys.exit(0 if R["ok"] else 1)
 

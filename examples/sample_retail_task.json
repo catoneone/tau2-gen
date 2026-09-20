@@ -1,0 +1,279 @@
+{
+  "type": "Tau2Task",
+  "data": {
+    "idx": 0,
+    "name": "[modify_address][PERSONA:None][GEN:7-00000]",
+    "description": "Purpose: modify address",
+    "prompt": "Hi! How can I help you today?",
+    "network_allow": [
+      "*"
+    ],
+    "network_block": [],
+    "artifacts": [],
+    "timeout": {},
+    "resources": {},
+    "id": "[modify_address][PERSONA:None][GEN:7-00000]",
+    "user_scenario": {
+      "persona": null,
+      "instructions": {
+        "domain": "retail",
+        "reason_for_call": "You moved and want order #G2462819 delivered to 129 Beacon St, Suite 472, Providence, RI 02903, USA instead.",
+        "known_info": "You are Ulysses Delacroix. Your email is ulysses.delacroix9220@example.net.",
+        "unknown_info": null,
+        "task_instructions": "Only the shipping address for that one order changes. Leave your profile address alone."
+      }
+    },
+    "ticket": null,
+    "initial_state": {
+      "initialization_data": {
+        "agent_data": {
+          "products": {
+            "82199351819": {
+              "name": "Bluetooth Speaker",
+              "product_id": "82199351819",
+              "variants": {
+                "78657975432": {
+                  "item_id": "78657975432",
+                  "options": {
+                    "color": "black",
+                    "battery life": "24h",
+                    "waterproof": "yes"
+                  },
+                  "available": true,
+                  "price": 301.1
+                },
+                "87574911862": {
+                  "item_id": "87574911862",
+                  "options": {
+                    "color": "black",
+                    "battery life": "8h",
+                    "waterproof": "no"
+                  },
+                  "available": true,
+                  "price": 324.07
+                },
+                "01895559797": {
+                  "item_id": "01895559797",
+                  "options": {
+                    "color": "black",
+                    "battery life": "16h",
+                    "waterproof": "no"
+                  },
+                  "available": true,
+                  "price": 52.16
+                },
+                "04974650752": {
+                  "item_id": "04974650752",
+                  "options": {
+                    "color": "teal",
+                    "battery life": "24h",
+                    "waterproof": "yes"
+                  },
+                  "available": true,
+                  "price": 266.31
+                }
+              }
+            },
+            "03423667127": {
+              "name": "Air Purifier",
+              "product_id": "03423667127",
+              "variants": {
+                "68465632122": {
+                  "item_id": "68465632122",
+                  "options": {
+                    "room size": "medium",
+                    "filter": "carbon",
+                    "color": "white"
+                  },
+                  "available": true,
+                  "price": 116.62
+                },
+                "92440268599": {
+                  "item_id": "92440268599",
+                  "options": {
+                    "room size": "small",
+                    "filter": "HEPA",
+                    "color": "grey"
+                  },
+                  "available": true,
+                  "price": 150.85
+                },
+                "66176031372": {
+                  "item_id": "66176031372",
+                  "options": {
+                    "room size": "large",
+                    "filter": "carbon",
+                    "color": "grey"
+                  },
+                  "available": true,
+                  "price": 68.42
+                },
+                "09281590139": {
+                  "item_id": "09281590139",
+                  "options": {
+                    "room size": "large",
+                    "filter": "HEPA",
+                    "color": "white"
+                  },
+                  "available": true,
+                  "price": 173.61
+                }
+              }
+            }
+          },
+          "users": {
+            "ulysses_delacroix_18159": {
+              "user_id": "ulysses_delacroix_18159",
+              "name": {
+                "first_name": "Ulysses",
+                "last_name": "Delacroix"
+              },
+              "address": {
+                "address1": "742 Juniper Way",
+                "address2": "Suite 147",
+                "city": "Boulder",
+                "country": "USA",
+                "state": "CO",
+                "zip": "80302"
+              },
+              "email": "ulysses.delacroix9220@example.net",
+              "payment_methods": {
+                "credit_card_83016613": {
+                  "source": "credit_card",
+                  "id": "credit_card_83016613",
+                  "brand": "visa",
+                  "last_four": "8609"
+                },
+                "gift_card_13909960": {
+                  "source": "gift_card",
+                  "id": "gift_card_13909960",
+                  "balance": 312.88
+                }
+              },
+              "orders": [
+                "#G2462819"
+              ]
+            }
+          },
+          "orders": {
+            "#G2462819": {
+              "order_id": "#G2462819",
+              "user_id": "ulysses_delacroix_18159",
+              "address": {
+                "address1": "742 Juniper Way",
+                "address2": "Suite 147",
+                "city": "Boulder",
+                "country": "USA",
+                "state": "CO",
+                "zip": "80302"
+              },
+              "items": [
+                {
+                  "name": "Bluetooth Speaker",
+                  "product_id": "82199351819",
+                  "item_id": "01895559797",
+                  "price": 52.16,
+                  "options": {
+                    "color": "black",
+                    "battery life": "16h",
+                    "waterproof": "no"
+                  }
+                },
+                {
+                  "name": "Air Purifier",
+                  "product_id": "03423667127",
+                  "item_id": "66176031372",
+                  "price": 68.42,
+                  "options": {
+                    "room size": "large",
+                    "filter": "carbon",
+                    "color": "grey"
+                  }
+                }
+              ],
+              "status": "pending",
+              "fulfillments": [],
+              "payment_history": [
+                {
+                  "transaction_type": "payment",
+                  "amount": 120.58,
+                  "payment_method_id": "credit_card_83016613"
+                }
+              ]
+            }
+          }
+        },
+        "user_data": null
+      },
+      "initialization_actions": null,
+      "message_history": null
+    },
+    "evaluation_criteria": {
+      "actions": [
+        {
+          "action_id": "find_user_id_by_email_0",
+          "requestor": "assistant",
+          "name": "find_user_id_by_email",
+          "arguments": {
+            "email": "ulysses.delacroix9220@example.net"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "get_user_details_1",
+          "requestor": "assistant",
+          "name": "get_user_details",
+          "arguments": {
+            "user_id": "ulysses_delacroix_18159"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "get_order_details_2",
+          "requestor": "assistant",
+          "name": "get_order_details",
+          "arguments": {
+            "order_id": "#G2462819"
+          },
+          "info": null,
+          "compare_args": null
+        },
+        {
+          "action_id": "modify_pending_order_address_3",
+          "requestor": "assistant",
+          "name": "modify_pending_order_address",
+          "arguments": {
+            "order_id": "#G2462819",
+            "address1": "129 Beacon St",
+            "address2": "Suite 472",
+            "city": "Providence",
+            "state": "RI",
+            "country": "USA",
+            "zip": "02903"
+          },
+          "info": null,
+          "compare_args": null
+        }
+      ],
+      "env_assertions": null,
+      "communicate_info": null,
+      "nl_assertions": [
+        "Agent should change the shipping address of the order."
+      ],
+      "reward_basis": [
+        "DB",
+        "NL_ASSERTION"
+      ]
+    },
+    "domain": "retail",
+    "tau_description": {
+      "purpose": "modify address",
+      "relevant_policies": null,
+      "notes": null
+    }
+  },
+  "key": "9a56ef0469f1463a27d2bba5241e2482fb4e04e57e6db531a5800b86823f4d0e",
+  "hash": "9a56ef0469f1463a27d2bba5241e2482fb4e04e57e6db531a5800b86823f4d0e"
+}

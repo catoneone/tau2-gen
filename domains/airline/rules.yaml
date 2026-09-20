@@ -1,0 +1,98 @@
+# Airline policy as a machine-readable rule table.
+#
+# Source: tau2-bench data/tau2/domains/airline/policy.md. Every entry cites the clause it encodes.
+# The engine in rules.py reads this file; test_rules.py checks the engine against the benchmark's
+# own 50 tasks. Those 50 tasks are used only as test fixtures and never enter a generated task set.
+
+now: "2024-05-15T15:00:00"          # "The current time is 2024-05-15 15:00:00 EST."
+
+cabins: [basic_economy, economy, business]
+memberships: [regular, silver, gold]
+
+cancel:
+  # "If any portion of the flight has already been flown, the agent cannot help and transfer is needed."
+  blocked_when_flown: true
+  flown_statuses: [flying, landed]
+  # "flight can be cancelled if any of the following is true"
+  any_of:
+    - within_24h            # "The booking was made within the last 24 hrs"
+    - airline_cancelled     # "The flight is cancelled by airline"
+    - cabin_business        # "It is a business flight"
+    - insurance_covered     # "user has travel insurance and the reason is covered by insurance"
+  within_24h_hours: 24
+  cancelled_status: cancelled
+  # "health or weather reasons" enable the insurance path
+  insurance_covered_reasons: [health, weather]
+  cancellation_reasons: [change_of_plan, airline_cancelled, other]
+
+modify_flights:
+  # "Basic economy flights cannot be modified."
+  forbidden_cabins: [basic_economy]
+  # "Other reservations can be modified without changing the origin, destination, and trip type."
+  preserve: [origin, destination, flight_type]
+  blocked_when_flown: true
+  # "the user needs to provide a single gift card or credit card for payment or refund"
+  payment_sources: [gift_card, credit_card]
+
+change_cabin:
+  # "all reservations, including basic economy, can change cabin without changing the flights"
+  forbidden_cabins: []
+  # "Cabin cannot be changed if any flight in the reservation has already been flown."
+  blocked_when_flown: true
+  # "Cabin class must remain the same across all the flights in the same reservation"
+  uniform_across_segments: true
+
+baggage:
+  # "The user can add but not remove checked bags."
+  allow_remove: false
+  blocked_when_flown: false
+  extra_bag_fee: 50           # "Each extra baggage is 50 dollars."
+  free_allowance:             # membership -> cabin -> free bags per passenger
+    regular: {basic_economy: 0, economy: 1, business: 2}
+    silver:  {basic_economy: 1, economy: 2, business: 3}
+    gold:    {basic_economy: 2, economy: 3, business: 4}
+
+insurance:
+  # "The user cannot add insurance after initial booking."
+  can_add_after_booking: false
+  price_per_passenger: 30     # "The travel insurance is 30 dollars per passenger"
+
+passengers:
+  # "The user can modify passengers but cannot modify the number of passengers."
+  can_change_count: false
+  max_per_reservation: 5      # "Each reservation can have at most five passengers."
+
+book:
+  max_passengers: 5
+  # "at most one travel certificate, at most one credit card, and at most three gift cards"
+  max_payment_methods: {certificate: 1, credit_card: 1, gift_card: 3}
+  # "All payment methods must already be in user profile for safety reasons."
+  payment_must_be_on_profile: true
+  # "Cabin class must be the same across all the flights in a reservation."
+  uniform_cabin: true
+  # "If the status is available, the flight has not taken off" — only these can be booked.
+  bookable_statuses: [available]
+
+compensation:
+  # "Do not proactively offer a compensation unless the user explicitly asks for one."
+  requires_user_request: true
+  # "Only compensate if the user is a silver/gold member or has travel insurance or flies business."
+  eligible_any_of: [member_silver_gold, has_insurance, cabin_business]
+  rules:
+    # "$100 times the number of passengers" for cancelled flights
+    - complaint: cancelled_flight
+      per_passenger: 100
+      requires_flight_status: cancelled
+      requires_change_or_cancel: false
+    # "$50 times the number of passengers" for delayed flights, after changing or cancelling
+    - complaint: delayed_flight
+      per_passenger: 50
+      requires_flight_status: delayed
+      requires_change_or_cancel: true
+  # "Do not offer compensation for any other reason than the ones listed above."
+  default: deny
+
+transfer:
+  # "transfer the user to a human agent if and only if the request cannot be handled"
+  message: "YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON."
+  reasons: [flown_segment, out_of_scope]
