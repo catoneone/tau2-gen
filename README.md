@@ -287,6 +287,7 @@ traces, 114 rollouts yield 339 such points.
 | `fidelity/leakage.py` | the two non-overlap guarantees |
 | `fidelity/convert.py` | τ² runner results into the trace schema |
 | `scripts/run_teacher.py` | run a reference model over a task set |
+| `scripts/export_affine.py` | export a generated set into Affine's `affine_tau2_v1` task-set format (per-task `initialization_data` kept; refuses ids from a held-out τ² split) |
 | `scripts/patch_tau2.sh` | apply `patches/` to the clone, idempotently |
 
 Generated task sets are gitignored. They are reproducible from a seed, and `manifest.json` records the
