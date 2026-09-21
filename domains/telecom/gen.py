@@ -585,7 +585,7 @@ def verify_task(data: dict, intent: str, ctx: Ctx, unfixable: bool, base_db: dic
 # ---------------------------------------------------------------------------
 def generate(n: int, seed: int, kmin: int, kmax: int, persona_mix: dict[str, float], exclude_bench: bool,
              unique_comp: bool, profile: dict, db_mode: str = "per-task", unfixable_rate: float | None = None,
-             verbose: bool = False) -> tuple[list[dict], list[dict], dict, dict | None]:
+             verbose: bool = False, exclude_bench_compositions: bool = False) -> tuple[list[dict], list[dict], dict, dict | None]:
     rng = random.Random(seed)
     shared = None
     if db_mode == "shared":
@@ -593,6 +593,10 @@ def generate(n: int, seed: int, kmin: int, kmax: int, persona_mix: dict[str, flo
         for _ in range(5):
             shared.add_customer(False)
     excl = {(e[0], tuple(e[1]), e[2]) for e in profile.get("exclude_compositions", [])} if exclude_bench else set()
+    # Persona-blind guard: a held-out (intent, fault composition) stays out under ANY persona. The persona
+    # changes how the customer talks, not what the agent must diagnose and repair, so a consumer that
+    # fingerprints tasks by (intent, composition) sees the triple-only exclusion as an overlap.
+    excl_comp = {(e[0], tuple(e[1])) for e in profile.get("exclude_compositions", [])} if exclude_bench_compositions else set()
     quota = quotas(n, profile["intent_weights"])  # intent 配额：精确贴 benchmark 的 36/29/49
     left = dict(quota)
     bt = profile.get("tasks") or {}
@@ -621,6 +625,8 @@ def generate(n: int, seed: int, kmin: int, kmax: int, persona_mix: dict[str, flo
             comp = swapped
             stats["unfixable_swapped_to_fixable"] += 1
         persona = user_sim.sample_persona(rng, persona_mix)
+        if (intent, comp) in excl_comp:
+            stats["excluded_benchmark_composition"] += 1; continue
         if (intent, comp, persona) in excl:
             stats["excluded_benchmark_triplet"] += 1; continue
         if unique_comp and (intent, comp) in seen_comp and attempts < n * 40:
@@ -666,6 +672,9 @@ def main() -> None:
     ap.add_argument("--max-faults", type=int, default=9)
     ap.add_argument("--persona-mix", default=None, help='JSON, e.g. {"None":1}; defaults to common/user_sim.DEFAULT_MIX')
     ap.add_argument("--no-exclude-benchmark", action="store_true", help="keep compositions that collide with the reference set (excluded by default)")
+    ap.add_argument("--exclude-benchmark-compositions", action="store_true",
+                    help="also exclude every held-out (intent, fault composition) under ANY persona, not only the exact "
+                         "(intent, composition, persona) triples; for consumers that fingerprint tasks persona-blind")
     ap.add_argument("--allow-duplicate-compositions", action="store_true")
     ap.add_argument("--bench-traces", nargs="*", default=None, help="extra trace files to check for leakage against")
     ap.add_argument("--unfixable-rate", type=float, default=None,
@@ -678,7 +687,8 @@ def main() -> None:
     profile = load_profile()
     t0 = time.time()
     records, metas, stats, shared_db = generate(a.n, a.seed, a.min_faults, a.max_faults, persona_mix, not a.no_exclude_benchmark,
-                                                not a.allow_duplicate_compositions, profile, a.db_mode, a.unfixable_rate, a.verbose)
+                                                not a.allow_duplicate_compositions, profile, a.db_mode, a.unfixable_rate, a.verbose,
+                                                exclude_bench_compositions=a.exclude_benchmark_compositions)
     print(f"generated {len(records)} tasks in {time.time() - t0:.1f}s; stats={stats}")
 
     from fidelity.leakage import check as leakage_check

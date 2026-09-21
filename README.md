@@ -305,7 +305,8 @@ without an API key.
 Two separate guarantees, both enforced before anything is written to disk.
 
 **Task identity.** Generated tasks exclude every `(intent, fault composition, persona)` triple in the
-split you declare held out, and no generated task id may equal a held-out task id. The report also
+split you declare held out, and no generated task id may equal a held-out task id. `--exclude-benchmark-compositions` widens this to every held-out `(intent, fault composition)` under
+any persona, for consumers whose decontamination fingerprint ignores the persona. The report also
 counts collisions against τ²'s full 2,285-task programmatic enumeration; those are reported but allowed,
 since that enumeration is a combination space rather than anyone's evaluation set.
 
