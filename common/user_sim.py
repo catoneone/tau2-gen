@@ -172,8 +172,14 @@ def compose_behaviour(rng: random.Random, refusable: bool = True, n: int = 3) ->
     return " ".join(picked)
 
 
-def instructions(rng: random.Random, core: str, refusable: bool = True) -> str:
+def instructions(rng: random.Random, core: str, refusable: bool = True, n: int = 3) -> str:
     """Case-specific constraints first, then composed behaviour. The core carries anything that bears on
-    what a correct outcome is; the behaviour carries none of it."""
-    tail = compose_behaviour(rng, refusable)
+    what a correct outcome is; the behaviour carries none of it.
+
+    `n` is how many behaviour clauses to append. It is a per-domain setting, not a constant: the
+    reference sets differ by a factor of six in how much they write here (tau2-bench's retail
+    instructions run to nine words at the median, its airline instructions to fifty-eight), and a
+    generic tail longer than the task itself both pads the prompt and drives up lexical overlap between
+    tasks."""
+    tail = compose_behaviour(rng, refusable, n)
     return f"{core.strip()} {tail}".strip()

@@ -139,6 +139,84 @@ def hide_id(scen: dict, d, uid: str, rid: str, reads: list[dict], rng: random.Ra
     return scen, lookups + tail
 
 
+# ---------------------------------------------------------------------------
+# Contingencies derived from the rule engine
+# ---------------------------------------------------------------------------
+# tau2-bench's airline instructions run to fifty-eight words at the median, and what fills them is not
+# varied phrasing of generic behaviour but task-specific contingencies: "if the agent tells you
+# cancellation is not possible, mention that you were told you didn't need insurance". That is pressure
+# aimed at the exact rule the task turns on.
+#
+# The rule engine already names that rule: every Decision carries a reason. So the contingency can be
+# looked up rather than written per case, and it stays correct when the rules change.
+#
+# Each line ends by closing the loop, with the user declining the alternative they just floated. The
+# pressure has to leave the correct end state where it was: a user who floats "could we cancel and
+# rebook instead" and then agrees to it has authorised a different outcome, and the expected actions
+# would no longer describe a correct trajectory.
+
+CONTINGENCY = {
+    "basic_economy": [
+        ("If the agent says the reservation is basic economy and cannot be changed, ask whether upgrading "
+         "the cabin first would make it possible, and say you do not want to pay for an upgrade when they explain it."),
+        ("If you are told basic economy cannot be modified, say you were not aware of that when you booked, "
+         "and accept the answer once the agent has explained it."),
+    ],
+    "flown_segment": [
+        "If the agent says part of the trip has already been flown, ask whether a human agent could still do it, and accept what you are told.",
+        "If you are told the trip has already started, ask what happens to the remaining leg, then let it go.",
+    ],
+    "not_eligible": [
+        ("If the agent says the booking cannot be cancelled, ask whether adding travel insurance now would "
+         "change that, and drop it once the agent explains."),
+        ("If you are told there is no refund, ask whether a credit for a future trip is possible instead, "
+         "and accept the answer."),
+    ],
+    "insurance_after_booking": [
+        "If the agent refuses, ask whether it can be added for just one passenger, and accept the answer.",
+        "If you are told insurance cannot be added now, ask whether it could be bought separately, then let it go.",
+    ],
+    "passenger_count": [
+        ("If the agent says the number of travellers cannot change, ask whether cancelling and rebooking would "
+         "work, and say you do not want to do that once they explain."),
+        ("If you are told the passenger count is fixed, ask whether the seat can simply go unused, and accept "
+         "what you are told."),
+    ],
+    "not_eligible_for_compensation": [
+        ("If the agent declines, mention that someone else on the same flight was given a certificate, and let "
+         "it go when the agent explains the policy."),
+        ("If you are told you are not eligible, ask what would have made you eligible, and accept the answer."),
+    ],
+    "remove_not_allowed": [
+        "If the agent says bags cannot be removed, ask whether the fee can be refunded instead, and accept the answer.",
+        "If you are told bags cannot be taken off, ask whether you can simply not bring them, then move on.",
+    ],
+    "within_24h": [
+        "If the agent asks why you are cancelling, say your plans changed.",
+        "If you are asked for a reason, say something came up and you no longer need the trip.",
+    ],
+    "cabin_business": [
+        "If the agent asks why you are cancelling, say your plans changed.",
+        "If you are asked for a reason, say the trip is no longer going ahead.",
+    ],
+    "airline_cancelled": [
+        "If the agent asks why you are cancelling, say it is because the airline cancelled one of the flights.",
+        "If you are asked for a reason, point to the flight the airline cancelled.",
+    ],
+    "insurance_covered": [
+        "If the agent asks why you are cancelling, say it is for health reasons and that you have travel insurance.",
+        "If you are asked for a reason, explain that you are unwell and that the booking has insurance.",
+    ],
+}
+
+
+def core_with_contingency(core: str, dec, rng: random.Random, p: float = 0.75) -> str:
+    """Case constraints plus, usually, the contingency that belongs to the rule this task turns on."""
+    variants = CONTINGENCY.get(getattr(dec, "reason", None))
+    if variants and rng.random() < p:
+        return f"{core} {rng.choice(variants)}".strip()
+    return core
+
 # ---- cancellation ----
 def _cancel_case(rng, cabin, insurance, created, statuses, reason_word, eligible_expected):
     d = adb.AirlineDB(rng)
@@ -163,7 +241,7 @@ def _cancel_case(rng, cabin, insurance, created, statuses, reason_word, eligible
     scenario = {
         "reason_for_call": f"You want to cancel reservation {rid}.{why}",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "", refusable=True),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("", dec, rng), refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid) + status_reads + writes, [dec.detail], scenario
 
@@ -239,7 +317,7 @@ def case_change_flights(rng):
     scenario = {
         "reason_for_call": f"You want to move the outbound flight on reservation {rid} to {new_date}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "You want to keep the return flight as it is. Pay any difference with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You want to keep the return flight as it is. Pay any difference with the card on file."),
     }
     return d, uid, rid, reads + writes, [dec.detail], scenario
 
@@ -255,7 +333,7 @@ def case_change_flights_denied_basic_economy(rng):
     scenario = {
         "reason_for_call": f"You want to move your flight on reservation {rid} to a later date.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "Do not ask to cancel the reservation."),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("Do not ask to cancel the reservation.", dec, rng)),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -275,7 +353,7 @@ def case_change_cabin(rng):
     scenario = {
         "reason_for_call": f"You want to upgrade reservation {rid} to {new_cabin.replace('_', ' ')}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "Keep the same flights and dates. You are willing to pay the difference with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="Keep the same flights and dates. You are willing to pay the difference with the card on file."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -295,7 +373,7 @@ def case_baggage_add(rng):
     scenario = {
         "reason_for_call": f"You want to add checked bags to reservation {rid}, {total} in total.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "Pay with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the card on file."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -310,7 +388,7 @@ def case_baggage_remove_denied(rng):
     scenario = {
         "reason_for_call": f"You want to remove the checked bags from reservation {rid} and get the money back.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "", refusable=True),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("", dec, rng), refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -321,7 +399,7 @@ def case_insurance_add_denied(rng):
     scenario = {
         "reason_for_call": f"You want to add travel insurance to reservation {rid}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "You are willing to pay for it.", refusable=True),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("You are willing to pay for it.", dec, rng), refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -332,7 +410,7 @@ def case_passenger_count_denied(rng):
     scenario = {
         "reason_for_call": f"One of the two travellers on reservation {rid} can no longer come, so you want to drop them.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "", refusable=True),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("", dec, rng), refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -348,7 +426,7 @@ def case_passenger_change(rng):
         "reason_for_call": f"The second traveller on reservation {rid} changed, you want to put {new['first_name']} {new['last_name']} on it instead.",
         "known_info": (f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}. "
                        f"The new passenger is {new['first_name']} {new['last_name']}, born {new['dob']}."),
-        "task_instructions": user_sim.instructions(rng, "The number of travellers stays the same."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="The number of travellers stays the same."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, ["Agent should replace the passenger without changing the number of passengers."], scenario
 
@@ -369,7 +447,7 @@ def case_compensation_cancelled_flight(rng):
     scenario = {
         "reason_for_call": f"The airline cancelled a flight on reservation {rid} and you want to be compensated for the trouble.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "You explicitly ask for compensation. You do not want to cancel the rest of the trip."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You explicitly ask for compensation. You do not want to cancel the rest of the trip."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -387,7 +465,7 @@ def case_compensation_denied(rng):
     scenario = {
         "reason_for_call": f"Your flight on reservation {rid} is delayed and you want a travel certificate for it.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "You ask for compensation directly.", refusable=True),
+        "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("You ask for compensation directly.", dec, rng), refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -415,7 +493,7 @@ def case_book(rng):
     scenario = {
         "reason_for_call": f"You want to book a one way {cabin.replace('_', ' ')} flight from {o} to {dst} on {date} for {n_pax} traveller(s).",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "Pay with the credit card on file. You only want the free checked bags you are entitled to, and you do not want travel insurance."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the credit card on file. You only want the free checked bags you are entitled to, and you do not want travel insurance."),
     }
     reads = [{"name": "get_user_details", "arguments": {"user_id": uid}},
              {"name": "search_direct_flight", "arguments": {"origin": o, "destination": dst, "date": date}}]
@@ -444,7 +522,7 @@ def case_cancel_two_reservations(rng):
     scenario = {
         "reason_for_call": f"You want to cancel both of your upcoming trips, reservations {rids[0]} and {rids[1]}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "Both reservations should be cancelled."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="Both reservations should be cancelled."),
     }
     return d, uid, rids[0], reads + writes, nl, scenario
 
@@ -540,7 +618,7 @@ def case_cancel_then_compensation(rng):
         "reason_for_call": (f"The airline cancelled a flight on reservation {rid}. You want the whole "
                             f"reservation cancelled, and you want compensation for the trouble."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, "You ask for compensation explicitly, after the cancellation is done."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You ask for compensation explicitly, after the cancellation is done."),
     }
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid) + writes, [dec_c.detail, dec_k.detail], scenario
 

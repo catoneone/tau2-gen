@@ -193,6 +193,20 @@ point the correct trajectory really does read through the profile to find it. Th
 `--unknown-id-share`. A task never claims the user has forgotten something the text still spells out:
 the substitution is checked, and is abandoned if the id cannot be removed cleanly.
 
+**Contingencies, derived from the rule engine.** What fills the reference set's airline instructions is
+not varied phrasing of generic behaviour but pressure aimed at the exact rule the task turns on: *if the
+agent tells you cancellation is not possible, mention that you were told you didn't need insurance*. The
+rule engine already names that rule, since every decision carries its reason, so the contingency is
+looked up rather than written per case, and it stays correct when the rules change. Each one ends by
+closing the loop, with the user declining the alternative they floated: a user who suggests "could we
+cancel and rebook instead" and then agrees has authorised a different outcome, and the expected actions
+would no longer describe a correct trajectory.
+
+**How much generic behaviour to append is per-domain.** The reference sets differ by a factor of six in
+how much they write here: nine words at the median for retail, fifty-eight for airline. A generic tail
+longer than the task itself both pads the prompt and drives up overlap between tasks, so retail gets one
+clause and airline two, on top of a contingency that carries the task-specific part.
+
 Case mixes are allocated by quota rather than drawn independently, so `--refuse-share` and the rest are
 settings rather than suggestions. Drawn independently at n=150, any one group moved by about eight
 points between runs.
@@ -201,14 +215,19 @@ Measured against the benchmark's own task files:
 
 | | airline gen | airline ref | retail gen | retail ref |
 |---|---|---|---|---|
-| distinct `task_instructions` | 0.99 | 0.98 | 1.00 | 0.61 |
-| pairwise Jaccard on those | 0.25 | 0.15 | 0.26 | 0.09 |
+| distinct `task_instructions` | 0.98 | 0.98 | 0.83 | 0.61 |
+| pairwise Jaccard on those | 0.22 | 0.15 | 0.17 | 0.09 |
+| words in `task_instructions`, median | 43 | 58 | 29 | 9 |
 | tasks touching ≥2 records | 21 % | 18 % | 61 % | 56 % |
 | records per task, median | 1 | 1 | 2 | 2 |
 | tasks with no correct write | 49 % | 48 % | 8 % | 9 % |
 
-One gap remains and is worth knowing about: lexical overlap on the instructions is higher than the
-reference, because clauses are drawn from fixed pools rather than written fresh for every task.
+One gap remains and is worth knowing about: lexical overlap on the instructions is still above the
+reference. Closing it further means either writing a contingency per task, which is what a hand-written
+set of fifty is, or paraphrasing the pools. Paraphrasing would have to be a build step that freezes a
+reviewed pool into the repository, not something the generator does at run time, or the guarantee that a
+clause cannot change what counts as correct stops being checkable and the toolchain stops working
+without an API key.
 
 ## Not copying the benchmark
 
