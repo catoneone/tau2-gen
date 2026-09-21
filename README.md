@@ -81,7 +81,19 @@ correct agent can pass.
 Airline scores on `[DB, COMMUNICATE]`, so its anchors gate. Retail's benchmark basis is
 `[DB, NL_ASSERTION]`, under which `communicate_info` is recorded but does not gate, exactly as in the
 benchmark's own 36 retail tasks that carry it. `--gate-communicate` switches retail to
-`[DB, COMMUNICATE]` and makes them gate, at the price of departing from the reference basis.
+`[DB, COMMUNICATE]` and makes them gate, at the price of departing from the reference basis. Use it for
+a training set, where roughly a tenth of retail tasks otherwise still pass on silence; leave it off for
+a set published as benchmark-shaped.
+
+`"basic economy"` is the one anchor that can fail a correct refusal, at a measured 8 %. The fidelity
+report lists it as a known false-fail rate beside the pass rate rather than inside it, because that is a
+property of the check and not of the agent.
+
+Two things the anchor deliberately does not do. It cannot tell a refusal from a false confirmation: on a
+denied task, an agent that writes nothing and says "done, I have cancelled it" satisfies both legs as
+cleanly as a correct refusal does. `communicate_info` is AND-only, so there is no clean fix inside the
+checker, and weakening the anchor would cost more than it buys. Catching that pattern belongs downstream
+of the checker, in whatever labels rollouts before they become training data.
 
 ### Airline: the policy as a rule table
 

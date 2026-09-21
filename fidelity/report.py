@@ -31,6 +31,15 @@ from fidelity.taxonomy import analyze, load, n_faults, persona_of, sampled, task
 
 # Acceptance thresholds. Reference values themselves come from --bench-traces; nothing is hardcoded.
 DASH = "-"
+
+# Must-mention strings whose recall was measured on a reference model's passing trajectories, as
+# (hits, trials). A string below 1.0 fails some correct agents, so the share of tasks carrying it is a
+# known false-fail rate and belongs beside the pass rate rather than inside it.
+#
+# Measured on tau2-bench's own airline teacher cell, over the 36 of 50 tasks it passes:
+ANCHOR_RECALL = {
+    "basic economy": (11, 12),
+}
 THRESH = {"teacher_lo": 0.6, "teacher_hi": 0.85, "msg1_unique": 0.78, "msg1_jaccard": 0.25, "ref_valid2": 0.9, "ref_not_identical": 0.8}
 
 
@@ -128,6 +137,29 @@ def build_report(gen_records: list[dict], bench_rows: list[dict] | None, gen_row
     counts = {k: len(v) for k, v in lk["overlap"].items()}
     L.append(f"- Result: **{'PASS' if lk['ok'] else 'FAIL'}**. Identifier overlap {counts}. Held-out task-id overlap {len(lk['task_id_overlap'])} (out of {lk['heldout_task_ids']} held-out tasks).")
     L.append(f"- Informational: {lk['full_enumeration_id_overlap']} tasks share a (composition, persona) with tau2's full enumeration of {lk['full_enumeration_ids']}. Those are not held out, so they are allowed.")
+    L.append("")
+    L += ["## Known false-fail rates", ""]
+    anchors = Counter(c for d in gen_datas
+                      for c in ((d.get("evaluation_criteria") or {}).get("communicate_info") or []))
+    gated = any("COMMUNICATE" in ((d.get("evaluation_criteria") or {}).get("reward_basis") or [])
+                for d in gen_datas)
+    if not anchors:
+        L.append("_No must-mention strings in this set._")
+    elif not gated:
+        L.append(f"_Must-mention strings are recorded but do not gate: COMMUNICATE is not in the reward "
+                 f"basis. Strings in use: {dict(anchors)}._")
+    else:
+        L += ["| must-mention string | tasks | measured recall | known false-fail |", "|---|---|---|---|"]
+        for a, n in anchors.most_common():
+            if a in ANCHOR_RECALL:
+                h, t = ANCHOR_RECALL[a]
+                L.append(f"| `{a}` | {n} | {h}/{t} ({100 * h / t:.0f} %) | {100 * (1 - h / t):.0f} % of the {n} tasks carrying it |")
+            else:
+                L.append(f"| `{a}` | {n} | anchored on the user's own words | not separately measured |")
+        L.append("")
+        L.append("A correct agent that phrases its answer without the string fails the task. That is a "
+                 "property of the check, not of the agent, so it is reported here and not folded into the "
+                 "pass rate above.")
     L.append("")
     L += ["## Rollout level", ""]
     if not gen_rows:
