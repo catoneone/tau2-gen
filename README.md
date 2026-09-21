@@ -222,10 +222,35 @@ actions and the target database state are untouched. Anything that could redirec
 different action, such as asking for a cheaper alternative or changing their mind about what they want,
 is deliberately absent: that belongs in a case of its own, where the expected actions can follow.
 
-Airline and retail also carry composite cases, which is how the benchmark's own scenarios look. Two
-rules in one conversation (upgrade the cabin and then add bags, where the free allowance follows the
-*new* cabin), two entities in one conversation (cancel one order and return an item from another), and
-scenarios where the user cannot name the record at all and the agent has to search the profile for it.
+## Rules compose, so the set does not saturate
+
+One case per rule gives one decision per task. Generate more and you get the same decisions with
+different customers: airline sat at 22 distinct decisions and retail at 20, whether the set was a
+hundred tasks or six hundred. Fresh entities stop a model memorising an id, which they do after the
+first few dozen tasks, and after that they add nothing.
+
+So the rules are also available as composable units, in `domains/<domain>/units.py`. A unit is one rule
+applied to one record: what to set up, what the engine decides, what a correct agent then does, and how
+the user asks for it. Units on different records compose freely, which is what the reference set's
+multi-reservation tasks look like. A few ordered pairs are declared to share a record, and those are the
+ones worth having, because the first rule changes the second one's inputs: upgrading the cabin changes
+the free baggage allowance, so the two cannot be reasoned about independently. Contradictory pairs are
+declared incompatible, and a composed task must contain at least one unit that writes, or it is just a
+second way of writing a refusal.
+
+| tasks generated | airline | retail | telecom |
+|---|---|---|---|
+| 150 | 60 | 75 | 136 |
+| 600 | 117 | 131 | 491 |
+| 1200 | 158 | 162 | 876 |
+| ceiling | 317 | 181 | 3405 |
+
+Telecom never had this problem: it composes atomic faults, following upstream's own pipeline, so its
+ceiling is the 3405 fault combinations its selection sets admit.
+
+Airline and retail also carry hand-written composite cases for shapes the units do not reach, entity
+spread across several records, and scenarios where the user cannot name the record at all and the agent
+has to search the profile for it.
 
 Two further properties cut across every case rather than belonging to any one of them, so they are
 applied by the generator rather than written into cases:

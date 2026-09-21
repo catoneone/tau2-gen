@@ -37,6 +37,7 @@ from tau2.data_model.tasks import InitializationData  # noqa: E402
 
 from common import schema, user_sim  # noqa: E402
 from domains.airline import db as adb  # noqa: E402
+from domains.airline import units as U  # noqa: E402
 from domains.airline.rules import AirlineRules  # noqa: E402
 
 DOMAIN = "airline"
@@ -267,6 +268,18 @@ def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str]
     agent cannot pass. The reason anchor is exempt: the user does not know the reason, which is the
     point of the task, and it carries its own measurement."""
     out = []
+    given = (scen or {}).get("_anchors")
+    if given:
+        # Topic anchors must be words the user used; reason anchors are exempt for the same reason as
+        # in the single-rule path — the user does not know the reason, which is the point of the task.
+        request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+        exempt = set(REASON_ANCHOR.values())
+        for a in given:
+            if a not in exempt and a not in request:
+                raise BuildError(f"topic anchor {a!r} is absent from the composed request")
+            if a not in out:
+                out.append(a)
+        return out or None
     a = TOPIC_ANCHOR.get(case_name)
     if a:
         if scen is not None:
@@ -718,7 +731,82 @@ def case_cancel_unknown_reservation(rng):
     return d, uid, target, reads + writes, [dec.detail], scenario
 
 
+def case_composed(rng):
+    """Two or three rules in one conversation, drawn from the composable units.
+
+    Units act on their own reservation unless a pair is declared to share one, which is where the
+    combination is more than the sum of its parts: upgrading the cabin changes the free baggage
+    allowance, so an agent that computes the allowance from the original cabin gets it wrong."""
+    import itertools
+
+    d = adb.AirlineDB(rng)
+    uid = d.add_user(rng.choice(adb.MEMBERSHIPS), ["credit_card", "gift_card"])
+    k = rng.choices([2, 3], weights=[0.65, 0.35], k=1)[0]
+    names = None
+    for _ in range(40):
+        cand = tuple(sorted(rng.sample(sorted(U.UNITS), k)))
+        # At least one unit must produce a write, so a composed task is "do this, and refuse that"
+        # rather than a second way of writing a pure refusal.
+        if U.compatible(cand) and set(cand) & U.ACTION_UNITS:
+            names = cand
+            break
+    if names is None:
+        raise BuildError("no compatible unit combination")
+
+    # If a declared shared-record pair is present, build it in its declared order on one reservation.
+    order = list(names)
+    shared = next((p for p in U.SHARED_RECORD if set(p) <= set(names)), None)
+    if shared:
+        order = [n for n in order if n not in shared]
+        order = list(shared) + order
+
+    results, shared_rid = [], None
+    for name in order:
+        rid = shared_rid if (shared and name == shared[1]) else None
+        try:
+            res = U.UNITS[name](d, uid, rng, rid)
+        except U.UnitError as e:
+            raise BuildError(f"{name}: {e}") from e
+        if shared and name == shared[0]:
+            shared_rid = res.rid
+        results.append((name, res))
+
+    reads = [{"name": "get_user_details", "arguments": {"user_id": uid}}]
+    seen = set()
+    for _, r in results:
+        if r.rid and r.rid not in seen:
+            seen.add(r.rid)
+            reads.append({"name": "get_reservation_details", "arguments": {"reservation_id": r.rid}})
+    writes, nl, anchors, constraints = [], [], [], []
+    for _, r in results:
+        reads.extend(x for x in r.extra_reads if x["name"] != "transfer_to_human_agents")
+        writes.extend(x for x in r.extra_reads if x["name"] == "transfer_to_human_agents")
+        writes.extend(r.writes)
+        nl.extend(r.nl)
+        if r.anchor and r.anchor not in anchors:
+            anchors.append(r.anchor)
+        if r.constraint:
+            constraints.append(r.constraint)
+    for _, r in results:
+        extra = REASON_ANCHOR.get(getattr(r.dec, "reason", None))
+        if extra and extra not in anchors:
+            anchors.append(extra)
+
+    asks = [r.request for _, r in results]
+    joined = "; ".join(asks[:-1]) + "; and " + asks[-1] if len(asks) > 2 else " and ".join(asks)
+    name = d.users[uid]["name"]
+    scenario = {
+        "reason_for_call": f"You have {len(asks)} things to sort out: {joined}.",
+        "known_info": f"You are {name['first_name']} {name['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(rng, n=2, core=" ".join(constraints)),
+        "_anchors": anchors,
+        "_units": list(names),
+    }
+    return d, uid, results[0][1].rid, reads + writes, nl, scenario
+
+
 CASES = [
+    Case("composed", case_composed, 130, "composite", single_record=False),
     Case("cancel_two_reservations", case_cancel_two_reservations, 13, "cancel", single_record=False),
     Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 10, "composite", single_record=False),
     Case("upgrade_then_baggage", case_upgrade_then_baggage, 7, "composite"),
@@ -756,7 +844,9 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
         scen, raw_actions = hide_id(scen, d, uid, rid, raw_actions, rng)
         hid = rid not in scen["reason_for_call"]
     persona_text = user_sim.render_persona(persona_name, rng, "555-555-0100") if persona_name != "None" else None
-    name = f"[{case.name}][PERSONA:{persona_name}][GEN:{tag}]"
+    units = scen.pop("_units", None)
+    label = f"composed:{'+'.join(units)}" if units else case.name
+    name = f"[{label}][PERSONA:{persona_name}][GEN:{tag}]"
     writes = [a for a in raw_actions if a["name"] not in
               READ_TOOLS]
     data = schema.Tau2TaskData(
@@ -780,7 +870,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
-            "communicate_info": communicate_info(case.name, dec, scen), "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
+            "communicate_info": communicate_info(case.name, dec, scen), "units": units, "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "reservation_id": rid, "delta_bytes": len(json.dumps(d.delta()))}
     return data, meta

@@ -38,6 +38,7 @@ from tau2.data_model.tasks import InitializationData  # noqa: E402
 
 from common import schema, user_sim  # noqa: E402
 from domains.retail import db as rdb  # noqa: E402
+from domains.retail import units as U  # noqa: E402
 
 DOMAIN = "retail"
 # Topic anchors, same construction and same evidence as airline: a word from the user's own request,
@@ -55,6 +56,20 @@ TOPIC_ANCHOR = {
 }
 
 def communicate_info(case_name: str, scen: dict) -> list[str] | None:
+    given = scen.get("_anchors")
+    if given:
+        request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+        out = []
+        for a in given:
+            if a not in request:
+                raise BuildError(f"topic anchor {a!r} is absent from the composed request")
+            if a not in out:
+                out.append(a)
+        return out or None
+    return _single_anchor(case_name, scen)
+
+
+def _single_anchor(case_name: str, scen: dict) -> list[str] | None:
     """Must-mention string for a task, checked against the request. See the airline generator for the
     measurement behind anchoring on the user's own words."""
     a = TOPIC_ANCHOR.get(case_name)
@@ -559,7 +574,61 @@ def case_cancel_unknown_order(rng):
     return d, uid, target, reads + writes, [f"Agent should cancel only order {target}."], scen
 
 
+def case_composed(rng):
+    """Two or three rules in one conversation, drawn from the composable units."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "gift_card", "paypal"])
+    k = rng.choices([2, 3], weights=[0.65, 0.35], k=1)[0]
+    names = None
+    for _ in range(40):
+        cand = tuple(sorted(rng.sample(sorted(U.UNITS), k)))
+        if U.compatible(cand) and set(cand) & U.ACTION_UNITS:
+            names = cand
+            break
+    if names is None:
+        raise BuildError("no compatible unit combination")
+    order = list(names)
+    shared = next((p for p in U.SHARED_RECORD if set(p) <= set(names)), None)
+    if shared:
+        order = list(shared) + [n for n in order if n not in shared]
+    results, shared_oid = [], None
+    for name in order:
+        oid = shared_oid if (shared and name == shared[1]) else None
+        try:
+            res = U.UNITS[name](d, uid, rng, oid)
+        except U.UnitError as e:
+            raise BuildError(f"{name}: {e}") from e
+        if shared and name == shared[0]:
+            shared_oid = res.oid
+        results.append((name, res))
+
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid)
+    seen = set()
+    for _, r in results:
+        if r.oid and r.oid not in seen:
+            seen.add(r.oid)
+            reads.append({"name": "get_order_details", "arguments": {"order_id": r.oid}})
+    writes, nl, anchors, constraints = [], [], [], []
+    for _, r in results:
+        reads.extend(r.extra_reads)
+        writes.extend(r.writes)
+        nl.extend(r.nl)
+        if r.anchor and r.anchor not in anchors:
+            anchors.append(r.anchor)
+        if r.constraint:
+            constraints.append(r.constraint)
+    asks = [r.request for _, r in results]
+    joined = "; ".join(asks[:-1]) + "; and " + asks[-1] if len(asks) > 2 else " and ".join(asks)
+    scen = {"reason_for_call": f"You have {len(asks)} things to sort out: {joined}.",
+            "known_info": known,
+            "task_instructions": user_sim.instructions(rng, n=1, core=" ".join(constraints)),
+            "_anchors": anchors, "_units": list(names)}
+    return d, uid, results[0][1].oid, reads + writes, nl, scen
+
+
 CASES = [
+    Case("composed", case_composed, 130, "composite", single_record=False),
     Case("cancel_two_orders", case_cancel_two_orders, 12, "cancel", single_record=False),
     Case("cancel_one_return_other", case_cancel_one_return_other, 15, "composite", single_record=False),
     Case("return_unknown_order", case_return_unknown_order, 10, "composite", single_record=False),
@@ -594,7 +663,9 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
         scen, raw_actions = hide_id(scen, d, uid, oid, raw_actions, rng)
         hid = oid not in scen["reason_for_call"]
     persona_text = user_sim.render_persona(persona_name, rng, "555-555-0100") if persona_name != "None" else None
-    name = f"[{case.name}][PERSONA:{persona_name}][GEN:{tag}]"
+    units = scen.pop("_units", None)
+    label = f"composed:{'+'.join(units)}" if units else case.name
+    name = f"[{label}][PERSONA:{persona_name}][GEN:{tag}]"
     writes = [a for a in raw_actions if a["name"] not in READ_TOOLS]
     data = schema.Tau2TaskData(
         idx=idx, name=name, description=f"Purpose: {case.name.replace('_', ' ')}", id=name,
@@ -622,7 +693,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
-            "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("orders", [])),
+            "units": units, "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("orders", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "order_id": oid, "delta_bytes": len(json.dumps(d.delta()))}
     return data, meta
