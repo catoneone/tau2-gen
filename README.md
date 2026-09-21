@@ -45,9 +45,43 @@ checked offline:
 | airline | policy compiled into `rules.yaml`, cases built to land on one side of one rule | `DB, COMMUNICATE` | replay, then compare database hashes |
 | retail | order lifecycle crossed with preconditions from the policy | `DB, NL_ASSERTION` | replay, then compare database hashes |
 
-Retail's basis contains an LLM-judged component, but an empty assertion list scores 1.0 without calling a
-judge, and 74 of the benchmark's own 114 retail tasks carry no assertions either. Generated retail tasks
-follow that: the database check is what gates, so nothing here needs an API key to verify.
+Retail's basis contains an LLM-judged component, but tau2 only invokes the judge when the assertion list
+is non-empty, and 74 of the benchmark's own 114 retail tasks carry none. Generated retail tasks leave it
+empty and keep the sentences as notes, so the database check is what gates and nothing here needs an API
+key. `--judge` puts the assertions back for anyone who wants them graded.
+
+## What the agent must say
+
+A task whose correct answer is to change nothing is passed, under a database check alone, by any agent
+that changes nothing — including one that says nothing, or invents a reason. That is a third of the
+airline set rewarding silence as much as a correct refusal.
+
+So each task carries one short must-mention string, matched case-insensitively as a substring. Choosing
+it is the whole problem: too specific and a correct agent fails on phrasing rather than on substance.
+Measured over the 36 airline tasks tau2-bench's own teacher passes:
+
+| candidate must-mention string | recall on passing trajectories |
+|---|---|
+| a topic word from the user's own request | 35/36 (97 %) |
+| "basic economy", where that rule is the blocker | 11/12 (92 %) |
+| the reservation id the agent acted on | 35/48 (73 %) |
+| "insurance", where cancellation is not eligible | 13/18 (72 %) |
+| "human agent", where a segment has been flown | 3/5 (60 %) |
+
+The requirement is therefore anchored on the subject the user raised, not on the reason the agent has to
+give. Silence cannot satisfy it, and a correct refusal is not punished for its wording. The
+reason-anchored strings were measured and rejected: at 60 to 73 % they would fail a correct agent
+between a quarter and two-fifths of the time, which is worse than a vacuous check. The one exception is
+"basic economy", which is well enough attested to be required on top of the topic anchor.
+
+That an anchor really is a word the user used is checked when the task is built, not assumed, so
+scenario wording that drifts away from its anchor fails loudly instead of quietly producing tasks no
+correct agent can pass.
+
+Airline scores on `[DB, COMMUNICATE]`, so its anchors gate. Retail's benchmark basis is
+`[DB, NL_ASSERTION]`, under which `communicate_info` is recorded but does not gate, exactly as in the
+benchmark's own 36 retail tasks that carry it. `--gate-communicate` switches retail to
+`[DB, COMMUNICATE]` and makes them gate, at the price of departing from the reference basis.
 
 ### Airline: the policy as a rule table
 

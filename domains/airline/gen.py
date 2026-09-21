@@ -217,6 +217,68 @@ def core_with_contingency(core: str, dec, rng: random.Random, p: float = 0.75) -
         return f"{core} {rng.choice(variants)}".strip()
     return core
 
+# ---------------------------------------------------------------------------
+# What the agent must say
+# ---------------------------------------------------------------------------
+# With basis [DB, COMMUNICATE] and an empty communicate_info, the COMMUNICATE leg is vacuous, so a task
+# whose correct answer is to change nothing passes for any agent that changes nothing — including one
+# that says nothing at all, or invents a reason. For training data that rewards freezing as much as a
+# correct refusal, and 39% of this set has no correct write.
+#
+# The fix is one short must-mention string, matched case-insensitively as a substring. Picking it is the
+# whole problem: too specific and a correct agent fails on phrasing. Measured on tau2-bench's own
+# airline traces, over the 36 tasks its teacher passes:
+#
+#   a topic word taken from the user's own request   35/36   97%
+#   "basic economy", where that rule is the blocker  11/12   92%
+#   "human agent", where a segment has been flown     3/5    60%
+#   "insurance", where cancellation is not eligible  13/18   72%
+#   the reservation id the agent acted on            35/48   73%
+#
+# So the requirement is anchored on the subject the user raised, not on the reason the agent must give.
+# It cannot be satisfied by silence, and it does not punish a correct refusal for its wording. The
+# reason-anchored strings were measured and rejected: at 60-73% recall they would fail a correct agent
+# between a quarter and two-fifths of the time, which is worse for training data than vacuity.
+
+TOPIC_ANCHOR = {
+    "cancel_within_24h": "cancel", "cancel_business": "cancel", "cancel_insurance_health": "cancel",
+    "cancel_airline_cancelled": "cancel", "cancel_denied": "cancel", "cancel_denied_flown": "cancel",
+    "cancel_two_reservations": "cancel", "cancel_unknown_reservation": "cancel",
+    "cancel_then_compensation": "cancel",
+    "change_flights": "flight", "change_flights_denied_basic_economy": "flight",
+    "change_flights_then_baggage": "flight",
+    "change_cabin": "cabin", "upgrade_then_baggage": "cabin",
+    "baggage_add": "bag", "baggage_remove_denied": "bag",
+    "insurance_add_denied": "insurance",
+    "passenger_change": "passenger", "passenger_count_denied": "passenger",
+    "compensation_cancelled_flight": "compensation", "compensation_denied": "certificate",
+    "book": "book",
+}
+# Added on top of the topic anchor only where the rule reason itself is well attested.
+REASON_ANCHOR = {"basic_economy": "basic economy"}
+
+
+def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str] | None:
+    """The must-mention strings for a task, with the topic anchor checked against the request.
+
+    The topic anchor only has its measured 97% recall because it is a word the user themselves used; an
+    anchor the scenario never says would be a phrasing trap. That property is checked here rather than
+    trusted, so drifting scenario wording fails loudly instead of quietly producing tasks a correct
+    agent cannot pass. The reason anchor is exempt: the user does not know the reason, which is the
+    point of the task, and it carries its own measurement."""
+    out = []
+    a = TOPIC_ANCHOR.get(case_name)
+    if a:
+        if scen is not None:
+            request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+            if a not in request:
+                raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request")
+        out.append(a)
+    r = REASON_ANCHOR.get(getattr(dec, "reason", None))
+    if r and r not in out:
+        out.append(r)
+    return out or None
+
 # ---- cancellation ----
 def _cancel_case(rng, cabin, insurance, created, statuses, reason_word, eligible_expected):
     d = adb.AirlineDB(rng)
@@ -334,6 +396,7 @@ def case_change_flights_denied_basic_economy(rng):
         "reason_for_call": f"You want to move your flight on reservation {rid} to a later date.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("Do not ask to cancel the reservation.", dec, rng)),
+        "_decision": dec,
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -351,7 +414,7 @@ def case_change_cabin(rng):
                              "flights": [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"]],
                              "payment_id": pay}}]
     scenario = {
-        "reason_for_call": f"You want to upgrade reservation {rid} to {new_cabin.replace('_', ' ')}.",
+        "reason_for_call": f"You want to move reservation {rid} up to the {new_cabin.replace('_', ' ')} cabin.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core="Keep the same flights and dates. You are willing to pay the difference with the card on file."),
     }
@@ -408,7 +471,7 @@ def case_passenger_count_denied(rng):
     d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]), n_pax=2)
     dec = R.can_change_passenger_count()
     scenario = {
-        "reason_for_call": f"One of the two travellers on reservation {rid} can no longer come, so you want to drop them.",
+        "reason_for_call": f"One of the two passengers on reservation {rid} can no longer come, so you want to drop them.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core=core_with_contingency("", dec, rng), refusable=True),
     }
@@ -423,10 +486,10 @@ def case_passenger_change(rng):
     writes = [{"name": "update_reservation_passengers",
                "arguments": {"reservation_id": rid, "passengers": [res["passengers"][0], new]}}]
     scenario = {
-        "reason_for_call": f"The second traveller on reservation {rid} changed, you want to put {new['first_name']} {new['last_name']} on it instead.",
+        "reason_for_call": f"The second passenger on reservation {rid} changed, you want to put {new['first_name']} {new['last_name']} on it instead.",
         "known_info": (f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}. "
                        f"The new passenger is {new['first_name']} {new['last_name']}, born {new['dob']}."),
-        "task_instructions": user_sim.instructions(rng, n=2, core="The number of travellers stays the same."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="The number of passengers stays the same."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, ["Agent should replace the passenger without changing the number of passengers."], scenario
 
@@ -554,8 +617,8 @@ def case_upgrade_then_baggage(rng):
                        "nonfree_baggages": dec_bag.extra["nonfree_baggages"], "payment_id": pay}},
     ]
     scenario = {
-        "reason_for_call": (f"For reservation {rid} you want two things: upgrade it to "
-                            f"{new_cabin.replace('_', ' ')}, and have {total} checked bags in total."),
+        "reason_for_call": (f"For reservation {rid} you want two things: move it up to the "
+                            f"{new_cabin.replace('_', ' ')} cabin, and have {total} checked bags in total."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(
             rng, "Mention both things. Keep the same flights and dates, and pay with the card on file."),
@@ -684,6 +747,8 @@ CASES = [
 def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random,
                history: bool = True, unknown_id: bool = False) -> tuple[dict, dict]:
     d, uid, rid, raw_actions, nl, scen = case.fn(rng)
+    # The rule reason, when the case recorded one, so a well-attested reason string can be added.
+    dec = scen.pop("_decision", None)
     hid = False
     if history and uid in d.users:
         add_history(d, uid, rng)
@@ -707,14 +772,15 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
             initialization_data=schema.InitializationData(agent_data=d.delta(), user_data=None),
             initialization_actions=None, message_history=None),
         evaluation_criteria=schema.EvaluationCriteria(
-            actions=_acts(raw_actions), env_assertions=[], communicate_info=None,
+            actions=_acts(raw_actions), env_assertions=[],
+            communicate_info=communicate_info(case.name, dec, scen),
             nl_assertions=nl, reward_basis=["DB", "COMMUNICATE"]),
         domain=DOMAIN,
         tau_description=schema.TauDescription(purpose=case.name.replace("_", " "), relevant_policies=None, notes=None),
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
-            "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
+            "communicate_info": communicate_info(case.name, dec, scen), "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "reservation_id": rid, "delta_bytes": len(json.dumps(d.delta()))}
     return data, meta

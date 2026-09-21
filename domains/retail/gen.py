@@ -40,6 +40,32 @@ from common import schema, user_sim  # noqa: E402
 from domains.retail import db as rdb  # noqa: E402
 
 DOMAIN = "retail"
+# Topic anchors, same construction and same evidence as airline: a word from the user's own request,
+# which a correct agent echoes and silence cannot satisfy.
+TOPIC_ANCHOR = {
+    "cancel_pending": "cancel", "cancel_delivered_denied": "cancel", "cancel_two_orders": "cancel",
+    "cancel_unknown_order": "cancel", "cancel_one_return_other": "cancel",
+    "modify_address": "address", "address_then_payment": "address", "modify_user_address": "address",
+    "modify_payment": "payment",
+    "modify_items": "item", "modify_items_cross_product_denied": "item", "modify_delivered_denied": "address",
+    "return_delivered": "return", "return_pending_denied": "return", "return_unknown_order": "return",
+    "exchange_delivered": "exchange", "exchange_two_items": "exchange",
+    "exchange_unavailable_denied": "exchange", "exchange_then_profile_address": "exchange",
+    "other_user_denied": "order",
+}
+
+def communicate_info(case_name: str, scen: dict) -> list[str] | None:
+    """Must-mention string for a task, checked against the request. See the airline generator for the
+    measurement behind anchoring on the user's own words."""
+    a = TOPIC_ANCHOR.get(case_name)
+    if not a:
+        return None
+    request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+    if a not in request:
+        raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request")
+    return [a]
+
+
 READ_TOOLS = {"find_user_id_by_email", "find_user_id_by_name_zip", "get_user_details", "get_order_details",
               "get_product_details", "get_item_details", "list_all_product_types", "calculate"}
 CANCEL_REASONS = ["no longer needed", "ordered by mistake"]
@@ -196,7 +222,7 @@ def case_modify_payment(rng):
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
     writes = [{"name": "modify_pending_order_payment", "arguments": {"order_id": oid, "payment_method_id": target}}]
     src = d.users[uid]["payment_methods"][target]["source"].replace("_", " ")
-    scen = {"reason_for_call": f"You want order {oid} charged to your {src} instead of the card you used.",
+    scen = {"reason_for_call": f"You want to change the payment method on order {oid} to your {src}.",
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="")}
     return d, uid, oid, reads + writes, ["Agent should change the payment method of the order."], scen
@@ -220,7 +246,7 @@ def case_modify_items(rng):
                "arguments": {"order_id": oid, "item_ids": [old["item_id"]],
                              "new_item_ids": [new["item_id"]], "payment_method_id": pay}}]
     want = ", ".join(f"{k} {v}" for k, v in new["options"].items())
-    scen = {"reason_for_call": f"On order {oid} you picked the wrong {old['name'].lower()}. You want the one with {want} instead.",
+    scen = {"reason_for_call": f"On order {oid} you picked the wrong item: the {old['name'].lower()}. You want the one with {want} instead.",
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="That is the only change you want. If the agent asks whether anything else on the order should change, say no. Pay any difference with the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should modify the item on the pending order."], scen
@@ -234,7 +260,7 @@ def case_modify_items_cross_product_denied(rng):
     reads, known, _ = _auth(d, uid, rng)
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}] + _product_reads(d, oid)
     other = d.products[pid_b]["name"].lower()
-    scen = {"reason_for_call": f"On order {oid} you want to swap the {d.products[pid_a]['name'].lower()} for a {other} instead.",
+    scen = {"reason_for_call": f"On order {oid} you want to swap one item, the {d.products[pid_a]['name'].lower()}, for a {other} instead.",
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="Do not ask to cancel the order.", refusable=True)}
     return d, uid, oid, reads, ["Agent should refuse, because an item can only be exchanged for a variant of the same product."], scen
@@ -558,7 +584,8 @@ CASES = [
 
 
 def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random,
-               history: bool = True, unknown_id: bool = False) -> tuple[dict, dict]:
+               history: bool = True, unknown_id: bool = False, judge: bool = False,
+               gate_communicate: bool = False) -> tuple[dict, dict]:
     d, uid, oid, raw_actions, nl, scen = case.fn(rng)
     hid = False
     if history and uid in d.users:
@@ -581,10 +608,17 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
             initialization_data=schema.InitializationData(agent_data=d.delta(), user_data=None),
             initialization_actions=None, message_history=None),
         evaluation_criteria=schema.EvaluationCriteria(
-            actions=_acts(raw_actions), env_assertions=[], communicate_info=None,
-            nl_assertions=nl, reward_basis=["DB", "NL_ASSERTION"]),
+            actions=_acts(raw_actions), env_assertions=[],
+            communicate_info=communicate_info(case.name, scen),
+            # tau2 grades nl_assertions with an LLM whenever the list is non-empty and NL_ASSERTION is
+            # in the basis. Leaving them populated puts a judge, and its cost and its nondeterminism,
+            # in the path of every rollout. The sentences are kept as notes instead, where they
+            # document the task without being graded; --judge puts them back.
+            nl_assertions=(nl if judge else None),
+            reward_basis=(["DB", "COMMUNICATE"] if gate_communicate else ["DB", "NL_ASSERTION"])),
         domain=DOMAIN,
-        tau_description=schema.TauDescription(purpose=case.name.replace("_", " "), relevant_policies=None, notes=None),
+        tau_description=schema.TauDescription(purpose=case.name.replace("_", " "), relevant_policies=None,
+                                              notes=" ".join(nl) if nl else None),
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
@@ -648,7 +682,8 @@ def rebalance(cases: list, refuse_share: float | None) -> list[float]:
 
 
 def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = None,
-             unknown_id_share: float = 0.45, verbose: bool = False):
+             unknown_id_share: float = 0.45, judge: bool = False, gate_communicate: bool = False,
+             verbose: bool = False):
     rng = random.Random(seed)
     weights = rebalance(CASES, refuse_share)
     left = quotas(n, weights)
@@ -667,7 +702,8 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
         persona = user_sim.sample_persona(rng, persona_mix)
         try:
             data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng,
-                                    history=True, unknown_id=rng.random() < unknown_id_share)
+                                    history=True, unknown_id=rng.random() < unknown_id_share,
+                                    judge=judge, gate_communicate=gate_communicate)
         except BuildError as e:
             stats[f"build_fail:{case.name}"] += 1
             if verbose:
@@ -697,13 +733,19 @@ def main() -> None:
                     help="share of tasks whose correct answer is to do nothing (tau2-bench retail: 0.09)")
     ap.add_argument("--unknown-id-share", type=float, default=0.45,
                     help="share of single-record tasks where the user cannot quote the order number")
+    ap.add_argument("--judge", action="store_true",
+                    help="keep nl_assertions populated, which makes every rollout call tau2's LLM judge")
+    ap.add_argument("--gate-communicate", action="store_true",
+                    help="score on [DB, COMMUNICATE] instead of the benchmark's [DB, NL_ASSERTION], so a "
+                         "task with no correct write cannot be passed by saying nothing")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     mix = json.loads(a.persona_mix) if a.persona_mix else {"None": 0.5, "Easy": 0.08, "Hard": 0.08, "Verbose": 0.06,
                                                            "Terse": 0.06, "NonNative": 0.06, "Impatient": 0.06,
                                                            "WrongNumberOnce": 0.04, "SideRequest": 0.03, "TechSavvy": 0.03}
     t0 = time.time()
-    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.unknown_id_share, a.verbose)
+    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.unknown_id_share,
+                                     a.judge, a.gate_communicate, a.verbose)
     print(f"generated {len(records)} retail tasks in {time.time() - t0:.1f}s; stats={stats}")
 
     from fidelity.leakage import check as leakage_check
