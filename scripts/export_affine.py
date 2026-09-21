@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -62,6 +63,14 @@ def held_out_ids(domain: str, split: str | None) -> set[str]:
         return {t["id"] for t in load_task_list(tasks_file)}
 
 
+TAG_RE = re.compile(r"\[(?:PERSONA|GEN):[^\]]*\]")
+
+
+def composition_key(task_id: str) -> str:
+    """`[mms_issue]a|b[PERSONA:Hard][GEN:61-0007]` -> `[mms_issue]a|b`: intent + fault composition, persona-blind."""
+    return TAG_RE.sub("", task_id).strip()
+
+
 def to_affine_record(task: dict, index: int, domain: str, prefix: str, system_prompt: str | None) -> dict:
     from tau2.data_model.tasks import Task
 
@@ -93,6 +102,9 @@ def main() -> None:
     ap.add_argument("--reward-basis", default=None,
                     help="override every task's reward_basis, comma-separated (e.g. DB or DB,COMMUNICATE); "
                          "dropping NL_ASSERTION also clears nl_assertions so no rollout can call the LLM judge")
+    ap.add_argument("--drop-held-out-compositions", action="store_true",
+                    help="drop (do not refuse) every task whose (intent, fault composition) — the id without its "
+                         "[PERSONA:..] / [GEN:..] tags — equals a held-out task's, under any persona (telecom)")
     ap.add_argument("--require-communicate-info", action="store_true",
                     help="refuse to export a task with no correct write (a refusal) whose communicate_info is empty — "
                          "under [DB, COMMUNICATE] such a task passes on silence")
@@ -101,6 +113,12 @@ def main() -> None:
     tasks = load_task_list(Path(a.tasks))
     held = held_out_ids(a.domain, a.exclude_split or None)
     collisions = [t["id"] for t in tasks if t["id"] in held]
+    dropped_comp = 0
+    if a.drop_held_out_compositions:
+        held_comp = {composition_key(i) for i in held}
+        keep = [t for t in tasks if composition_key(t["id"]) not in held_comp]
+        dropped_comp = len(tasks) - len(keep)
+        tasks = keep
     if collisions:
         raise SystemExit(f"refusing to export: {len(collisions)} task id(s) collide with τ² {a.domain}/{a.exclude_split}: "
                          f"{collisions[:3]}...")
@@ -130,6 +148,7 @@ def main() -> None:
             "tasks_file": str(a.tasks), "manifest": manifest,
             "held_out_split": a.exclude_split or None, "held_out_ids_checked": len(held),
             "reward_basis_override": a.reward_basis, "require_communicate_info": a.require_communicate_info,
+            "dropped_held_out_compositions": dropped_comp,
         },
         "n": len(records),
         "n_without_initialization_data": without_db,
@@ -140,7 +159,8 @@ def main() -> None:
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=None), encoding="utf-8")
     print(f"wrote {a.out}: {len(records)} {a.domain} records, {without_db} without initialization_data, "
-          f"0 collisions against {len(held)} held-out ids ({a.exclude_split or 'no split'})")
+          f"0 collisions against {len(held)} held-out ids ({a.exclude_split or 'no split'}), "
+          f"{dropped_comp} dropped for a held-out (intent, composition)")
 
 
 if __name__ == "__main__":
