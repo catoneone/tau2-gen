@@ -272,7 +272,12 @@ def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str]
     if given:
         # Topic anchors must be words the user used; reason anchors are exempt for the same reason as
         # in the single-rule path — the user does not know the reason, which is the point of the task.
-        request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+    # Only `reason_for_call` counts. `task_instructions` is guidance to the simulator about how to
+    # behave, not words the user necessarily says aloud, and the agent echoes what is said. A probe
+    # run found a task whose database check passed and whose certificate amount was exact, scored
+    # zero because the request said "be compensated" while the anchor was "compensation": the word
+    # appeared only in the instructions, so this check had waved it through.
+        request = (scen.get("reason_for_call") or "").lower()
         exempt = set(REASON_ANCHOR.values())
         for a in given:
             if a not in exempt and a not in request:
@@ -283,7 +288,12 @@ def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str]
     a = TOPIC_ANCHOR.get(case_name)
     if a:
         if scen is not None:
-            request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+        # Only `reason_for_call` counts. `task_instructions` is guidance to the simulator about how to
+        # behave, not words the user necessarily says aloud, and the agent echoes what is said. A probe
+        # run found a task whose database check passed and whose certificate amount was exact, scored
+        # zero because the request said "be compensated" while the anchor was "compensation": the word
+        # appeared only in the instructions, so this check had waved it through.
+            request = (scen.get("reason_for_call") or "").lower()
             if a not in request:
                 raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request")
         out.append(a)
@@ -371,6 +381,11 @@ def _modify_reservation(rng, cabin, statuses=("available", "available"), insuran
     return d, uid, rid
 
 
+# Naming the flight is not decoration. The request "move it to <date>" is satisfied by any flight on
+# that date, so the one the generator picked is not the only correct answer, and the default database
+# still holds tau2-bench's own inventory on the same routes, which the agent can and does book. A probe
+# run scored change_flights 1 of 7 and caught a booking placed on an upstream HAT flight for exactly
+# these two reasons.
 def case_change_flights(rng):
     d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]))
     res = d.reservations[rid]
@@ -381,6 +396,7 @@ def case_change_flights(rng):
     new_date = adb.future_date(rng, 3, 20)
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
     chosen = alts[0]
+    dep = d.flights[chosen]["scheduled_departure_time_est"][:5]
     new_flights = [{"flight_number": chosen, "date": new_date}] + \
                   [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"][1:]]
     pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] in ("credit_card", "gift_card"))
@@ -390,7 +406,8 @@ def case_change_flights(rng):
     reads = _read_actions(uid, rid) + [
         {"name": "search_direct_flight", "arguments": {"origin": seg["origin"], "destination": seg["destination"], "date": new_date}}]
     scenario = {
-        "reason_for_call": f"You want to move the outbound flight on reservation {rid} to {new_date}.",
+        "reason_for_call": (f"You want to move the outbound flight on reservation {rid} to flight "
+                            f"{chosen} on {new_date}, the one departing {dep}."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core="You want to keep the return flight as it is. Pay any difference with the card on file."),
     }
@@ -521,7 +538,8 @@ def case_compensation_cancelled_flight(rng):
         raise BuildError(dec.reason)
     writes = _status_reads(d, rid) + [{"name": "send_certificate", "arguments": {"user_id": uid, "amount": dec.extra["amount"]}}]
     scenario = {
-        "reason_for_call": f"The airline cancelled a flight on reservation {rid} and you want to be compensated for the trouble.",
+        "reason_for_call": (f"The airline cancelled a flight on reservation {rid} and you want "
+                            f"compensation for the trouble."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core="You explicitly ask for compensation. You do not want to cancel the rest of the trip."),
     }
@@ -555,20 +573,28 @@ def case_book(rng):
     cabin = rng.choice(["economy", "business"])
     n_pax = rng.randint(1, 2)
     fn, entry = d.add_flight(o, dst, date, "available", min_seats=n_pax)
+    dep = d.flights[fn]["scheduled_departure_time_est"][:5]
+    pax = d.passengers(uid, n_pax)
+    # Every passenger's name and date of birth has to be something the user can actually say: the
+    # policy makes the agent collect all three per passenger, and a probe run failed bookings where the
+    # second passenger's date of birth existed only in the expected action, so the simulator invented one.
+    others = "; ".join(f"{p['first_name']} {p['last_name']}, born {p['dob']}" for p in pax[1:])
     pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] == "credit_card")
-    dec = R.can_book(d.delta(), d.users[uid], cabin, d.passengers(uid, n_pax), [pay], ["available"])
+    dec = R.can_book(d.delta(), d.users[uid], cabin, pax, [pay], ["available"])
     if not dec.allowed:
         raise BuildError(dec.reason)
     free_per_pax = R.r["baggage"]["free_allowance"][d.users[uid]["membership"]][cabin]
     writes = [{"name": "book_reservation", "arguments": {
         "user_id": uid, "origin": o, "destination": dst, "flight_type": "one_way", "cabin": cabin,
         "flights": [{"flight_number": fn, "date": date}],
-        "passengers": d.passengers(uid, n_pax),
+        "passengers": pax,
         "payment_methods": [{"payment_id": pay, "amount": int(entry["prices"][cabin] * n_pax)}],
         "total_baggages": free_per_pax * n_pax, "nonfree_baggages": 0, "insurance": "no"}}]
     scenario = {
-        "reason_for_call": f"You want to book a one way {cabin.replace('_', ' ')} flight from {o} to {dst} on {date} for {n_pax} traveller(s).",
-        "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
+        "reason_for_call": (f"You want to book flight {fn} from {o} to {dst} on {date}, the one departing "
+                            f"{dep}, in {cabin.replace('_', ' ')}, for {n_pax} passenger(s)."),
+        "known_info": (f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. "
+                       f"Your user id is {uid}." + (f" The other passenger is {others}." if others else "")),
         "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the credit card on file. You only want the free checked bags you are entitled to, and you do not want travel insurance."),
     }
     reads = [{"name": "get_user_details", "arguments": {"user_id": uid}},

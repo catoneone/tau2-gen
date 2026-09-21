@@ -76,7 +76,28 @@ between a quarter and two-fifths of the time, which is worse than a vacuous chec
 
 That an anchor really is a word the user used is checked when the task is built, not assumed, so
 scenario wording that drifts away from its anchor fails loudly instead of quietly producing tasks no
-correct agent can pass.
+correct agent can pass. The check reads `reason_for_call` only. `task_instructions` is guidance to the
+simulator about how to behave, not words the user necessarily says aloud, and the agent echoes what is
+said: a probe run scored a task zero whose database check passed and whose certificate amount was exact,
+because the request said "be compensated" while the anchor was "compensation" and the word appeared
+only in the instructions.
+
+## Pin the answer, or the task has no answer
+
+A request the generator can satisfy more than one way is not a hard task, it is a broken one. The
+expected write is one correct trajectory; if the wording admits others, a correct agent fails. Three
+ways this happened, all found by running a reference model over the sets rather than by reading them:
+
+- "exchange both items for different versions" never said *which* versions, so any available variant
+  satisfied it and the pair the generator drew did not. That case scored 0 of 7.
+- "move the outbound flight to <date>" is satisfied by any flight that day. Worse, the default database
+  still holds tau2-bench's own inventory on the same routes, so a booking landed on an upstream flight
+  the generated set had never heard of.
+- a second passenger's date of birth existed only in the expected action, so the simulator, asked for it
+  by an agent following the policy, invented one.
+
+Requests now name the flight, the variant and every passenger's details. The rule for a new case: if two
+different tool calls would both satisfy the sentence, the sentence is not finished.
 
 Airline scores on `[DB, COMMUNICATE]`, so its anchors gate. Retail's benchmark basis is
 `[DB, NL_ASSERTION]`, under which `communicate_info` is recorded but does not gate, exactly as in the

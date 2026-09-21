@@ -58,7 +58,12 @@ TOPIC_ANCHOR = {
 def communicate_info(case_name: str, scen: dict) -> list[str] | None:
     given = scen.get("_anchors")
     if given:
-        request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+    # Only `reason_for_call` counts. `task_instructions` is guidance to the simulator about how to
+    # behave, not words the user necessarily says aloud, and the agent echoes what is said. A probe
+    # run found a task whose database check passed and whose certificate amount was exact, scored
+    # zero because the request said "be compensated" while the anchor was "compensation": the word
+    # appeared only in the instructions, so this check had waved it through.
+        request = (scen.get("reason_for_call") or "").lower()
         out = []
         for a in given:
             if a not in request:
@@ -75,7 +80,12 @@ def _single_anchor(case_name: str, scen: dict) -> list[str] | None:
     a = TOPIC_ANCHOR.get(case_name)
     if not a:
         return None
-    request = f"{scen.get('reason_for_call', '')} {scen.get('task_instructions', '')}".lower()
+# Only `reason_for_call` counts. `task_instructions` is guidance to the simulator about how to
+# behave, not words the user necessarily says aloud, and the agent echoes what is said. A probe
+# run found a task whose database check passed and whose certificate amount was exact, scored
+# zero because the request said "be compensated" while the anchor was "compensation": the word
+# appeared only in the instructions, so this check had waved it through.
+    request = (scen.get("reason_for_call") or "").lower()
     if a not in request:
         raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request")
     return [a]
@@ -222,7 +232,8 @@ def case_modify_address(rng):
     writes = [{"name": "modify_pending_order_address",
                "arguments": {"order_id": oid, "address1": street, "address2": suite, "city": city,
                              "state": state, "country": "USA", "zip": zipc}}]
-    scen = {"reason_for_call": f"You moved and want order {oid} delivered to {street}, {suite}, {city}, {state} {zipc}, USA instead.",
+    scen = {"reason_for_call": (f"You moved and want the delivery address on order {oid} changed to "
+                                f"{street}, {suite}, {city}, {state} {zipc}, USA."),
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="Only the shipping address for that one order changes. Leave your profile address alone.")}
     return d, uid, oid, reads + writes, ["Agent should change the shipping address of the order."], scen
@@ -418,20 +429,25 @@ def case_exchange_two_items(rng):
     pids = [d.add_product(n_variants=5), d.add_product(n_variants=5)]
     oid = d.add_order(uid, "delivered", product_ids=pids)
     order = d.orders[oid]
-    olds, news = [], []
+    olds, news, wants = [], [], []
     for it in order["items"]:
         alts = [v for v in d.variants(it["product_id"]) if v["item_id"] != it["item_id"]]
         if not alts:
             raise BuildError("no alternative variant")
+        new = rng.choice(alts)
         olds.append(it["item_id"])
-        news.append(rng.choice(alts)["item_id"])
+        news.append(new["item_id"])
+        # Name the variant wanted. Without it the request says only "different versions", any available
+        # variant satisfies it, and the one the generator happened to pick is not the only correct
+        # answer: a probe run scored this case 0 of 7 for exactly that reason.
+        wants.append(f"the {it['name'].lower()} as {', '.join(f'{k} {v}' for k, v in new['options'].items())}")
     pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] == "credit_card")
     reads, known, _ = _auth(d, uid, rng)
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}] + _product_reads(d, oid)
     writes = [{"name": "exchange_delivered_order_items",
                "arguments": {"order_id": oid, "item_ids": olds, "new_item_ids": news, "payment_method_id": pay}}]
-    names = " and ".join(sorted({i["name"].lower() for i in order["items"]}))
-    scen = {"reason_for_call": f"You want to exchange both the {names} from order {oid} for different versions.",
+    scen = {"reason_for_call": (f"On order {oid} you want to exchange two items: you want "
+                                f"{' and '.join(wants)}."),
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="Mention both items. If the agent asks whether that is everything, say yes. Settle any difference on the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should exchange both items in a single exchange call."], scen

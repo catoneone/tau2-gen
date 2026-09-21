@@ -101,6 +101,7 @@ def u_change_flights_ok(d, uid, rng, rid=None) -> UnitResult:
     seg = res["flights"][0]
     new_date = adb.future_date(rng, 3, 20)
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
+    dep = d.flights[alts[0]]["scheduled_departure_time_est"][:5]
     flights = [{"flight_number": alts[0], "date": new_date}] + \
               [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"][1:]]
     return UnitResult(rid, dec,
@@ -110,7 +111,10 @@ def u_change_flights_ok(d, uid, rng, rid=None) -> UnitResult:
                       extra_reads=[{"name": "search_direct_flight",
                                     "arguments": {"origin": seg["origin"], "destination": seg["destination"],
                                                   "date": new_date}}],
-                      request=f"move the outbound flight on reservation {rid} to {new_date}",
+                      # The flight is named: "to <date>" alone is satisfied by any flight that day,
+                      # including tau2-bench's own inventory, which the default database still holds.
+                      request=(f"move the outbound flight on reservation {rid} to flight {alts[0]} on "
+                               f"{new_date}, the one departing {dep}"),
                       anchor="flight", nl=[dec.detail],
                       constraint="The return flight stays as it is.")
 
