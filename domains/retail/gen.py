@@ -104,7 +104,7 @@ def case_cancel_pending(rng):
     writes = [{"name": "cancel_pending_order", "arguments": {"order_id": oid, "reason": reason}}]
     scen = {"reason_for_call": f"You want to cancel order {oid} because it is {reason}.",
             "known_info": known,
-            "task_instructions": "Confirm once the agent lists the order details and asks you to confirm."}
+            "task_instructions": user_sim.instructions(rng, "")}
     return d, uid, oid, reads + writes, ["Agent should cancel the order."], scen
 
 
@@ -114,8 +114,7 @@ def case_cancel_delivered_denied(rng):
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
     scen = {"reason_for_call": f"You want to cancel order {oid}, you changed your mind about it.",
             "known_info": known,
-            "task_instructions": ("If the agent says a delivered order cannot be cancelled, ask what your options are "
-                                  "and accept the answer. Do not ask to return anything in this conversation.")}
+            "task_instructions": user_sim.instructions(rng, "Do not ask to return anything in this conversation.", refusable=True)}
     return d, uid, oid, reads, ["Agent should refuse to cancel the order because it has already been delivered."], scen
 
 
@@ -131,7 +130,7 @@ def case_modify_address(rng):
                              "state": state, "country": "USA", "zip": zipc}}]
     scen = {"reason_for_call": f"You moved and want order {oid} delivered to {street}, {suite}, {city}, {state} {zipc}, USA instead.",
             "known_info": known,
-            "task_instructions": "Only the shipping address for that one order changes. Leave your profile address alone."}
+            "task_instructions": user_sim.instructions(rng, "Only the shipping address for that one order changes. Leave your profile address alone.")}
     return d, uid, oid, reads + writes, ["Agent should change the shipping address of the order."], scen
 
 
@@ -146,7 +145,7 @@ def case_modify_payment(rng):
     src = d.users[uid]["payment_methods"][target]["source"].replace("_", " ")
     scen = {"reason_for_call": f"You want order {oid} charged to your {src} instead of the card you used.",
             "known_info": known,
-            "task_instructions": "Confirm when the agent lists the change."}
+            "task_instructions": user_sim.instructions(rng, "")}
     return d, uid, oid, reads + writes, ["Agent should change the payment method of the order."], scen
 
 
@@ -170,8 +169,7 @@ def case_modify_items(rng):
     want = ", ".join(f"{k} {v}" for k, v in new["options"].items())
     scen = {"reason_for_call": f"On order {oid} you picked the wrong {old['name'].lower()}. You want the one with {want} instead.",
             "known_info": known,
-            "task_instructions": ("That is the only change you want. If the agent asks whether anything else on the order "
-                                  "should change, say no. Pay any difference with the credit card on file.")}
+            "task_instructions": user_sim.instructions(rng, "That is the only change you want. If the agent asks whether anything else on the order should change, say no. Pay any difference with the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should modify the item on the pending order."], scen
 
 
@@ -185,8 +183,7 @@ def case_modify_items_cross_product_denied(rng):
     other = d.products[pid_b]["name"].lower()
     scen = {"reason_for_call": f"On order {oid} you want to swap the {d.products[pid_a]['name'].lower()} for a {other} instead.",
             "known_info": known,
-            "task_instructions": ("If the agent says an item can only be changed to another version of the same product, "
-                                  "accept it and do not ask to cancel the order.")}
+            "task_instructions": user_sim.instructions(rng, "Do not ask to cancel the order.", refusable=True)}
     return d, uid, oid, reads, ["Agent should refuse, because an item can only be exchanged for a variant of the same product."], scen
 
 
@@ -196,7 +193,7 @@ def case_modify_delivered_denied(rng):
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
     scen = {"reason_for_call": f"You want to change the shipping address on order {oid}.",
             "known_info": known,
-            "task_instructions": "If the agent says the order is already delivered and cannot be changed, accept the answer."}
+            "task_instructions": user_sim.instructions(rng, "", refusable=True)}
     return d, uid, oid, reads, ["Agent should refuse, because only pending orders can be modified."], scen
 
 
@@ -212,7 +209,7 @@ def case_return_delivered(rng):
                "arguments": {"order_id": oid, "item_ids": items, "payment_method_id": pay}}]
     scen = {"reason_for_call": f"You want to return the {order['items'][0]['name'].lower()} from order {oid}.",
             "known_info": known,
-            "task_instructions": "You want the refund on the original payment method. Keep everything else on the order."}
+            "task_instructions": user_sim.instructions(rng, "You want the refund on the original payment method. Keep everything else on the order.")}
     return d, uid, oid, reads + writes, ["Agent should return the requested item."], scen
 
 
@@ -222,7 +219,7 @@ def case_return_pending_denied(rng):
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
     scen = {"reason_for_call": f"You want to return an item from order {oid}.",
             "known_info": known,
-            "task_instructions": "If the agent says the order has not been delivered yet, ask what you can do instead and accept the answer."}
+            "task_instructions": user_sim.instructions(rng, "", refusable=True)}
     return d, uid, oid, reads, ["Agent should refuse, because only delivered orders can be returned."], scen
 
 
@@ -246,7 +243,7 @@ def case_exchange_delivered(rng):
     want = ", ".join(f"{k} {v}" for k, v in new["options"].items())
     scen = {"reason_for_call": f"The {old['name'].lower()} from order {oid} is not what you wanted. You want to exchange it for the one with {want}.",
             "known_info": known,
-            "task_instructions": ("That is the only item you want to exchange. Settle any difference on the credit card on file.")}
+            "task_instructions": user_sim.instructions(rng, "That is the only item you want to exchange. Settle any difference on the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should exchange the item for the requested variant."], scen
 
 
@@ -267,7 +264,7 @@ def case_exchange_unavailable_denied(rng):
     want = ", ".join(f"{k} {v}" for k, v in target["options"].items())
     scen = {"reason_for_call": f"You want to exchange the {d.products[pid]['name'].lower()} from order {oid} for the one with {want}.",
             "known_info": known,
-            "task_instructions": "If that version is out of stock, ask what is available and then decide to keep what you have."}
+            "task_instructions": user_sim.instructions(rng, "If that version is out of stock, decide to keep what you have.", refusable=True)}
     return d, uid, oid, reads, ["Agent should tell the user the requested variant is not available and should not exchange it."], scen
 
 
@@ -282,7 +279,7 @@ def case_modify_user_address(rng):
                              "state": state, "country": "USA", "zip": zipc}}]
     scen = {"reason_for_call": f"You moved and want the address on your profile updated to {street}, {suite}, {city}, {state} {zipc}, USA.",
             "known_info": known,
-            "task_instructions": "Only your profile address changes. Do not change any existing order."}
+            "task_instructions": user_sim.instructions(rng, "Only your profile address changes. Do not change any existing order.")}
     return d, uid, None, reads + writes, ["Agent should update the address on the user profile."], scen
 
 
@@ -295,8 +292,7 @@ def case_other_user_denied(rng):
     scen = {"reason_for_call": (f"You want to cancel order {oid}. You also want to cancel order {other_order}, "
                                 f"which belongs to your flatmate, to save them a phone call."),
             "known_info": known,
-            "task_instructions": ("If the agent refuses to touch the other person's order, accept it and let them handle "
-                                  "only yours.")}
+            "task_instructions": user_sim.instructions(rng, "Let the agent handle only your own order.", refusable=True)}
     writes = [{"name": "cancel_pending_order", "arguments": {"order_id": oid, "reason": rng.choice(CANCEL_REASONS)}}]
     return d, uid, oid, reads + writes, ["Agent should refuse to act on the other user's order and should only cancel the user's own order."], scen
 
@@ -316,7 +312,7 @@ def case_cancel_two_orders(rng):
         nl.append(f"Agent should cancel order {oid}.")
     scen = {"reason_for_call": f"You want to cancel both of your open orders, {oids[0]} and {oids[1]}, they are {reason}.",
             "known_info": known,
-            "task_instructions": "Both should be cancelled. Confirm each one as the agent lists it."}
+            "task_instructions": user_sim.instructions(rng, "Both orders should be cancelled.")}
     return d, uid, oids[0], reads + writes, nl, scen
 
 
@@ -343,13 +339,159 @@ def case_exchange_two_items(rng):
     names = " and ".join(sorted({i["name"].lower() for i in order["items"]}))
     scen = {"reason_for_call": f"You want to exchange both the {names} from order {oid} for different versions.",
             "known_info": known,
-            "task_instructions": ("Mention both items. If the agent asks whether that is everything, say yes. "
-                                  "Settle any difference on the credit card on file.")}
+            "task_instructions": user_sim.instructions(rng, "Mention both items. If the agent asks whether that is everything, say yes. Settle any difference on the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should exchange both items in a single exchange call."], scen
 
 
+# ---- composite cases: two rules, two orders, one conversation ----
+def case_cancel_one_return_other(rng):
+    """A pending order to cancel and a delivered order to return from, in the same conversation. The
+    benchmark's retail tasks touch two entities at the median; single-rule tasks do not."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "gift_card"])
+    pending = d.add_order(uid, "pending")
+    delivered = d.add_order(uid, "delivered", n_items=rng.randint(2, 3))
+    reason = rng.choice(CANCEL_REASONS)
+    item = d.orders[delivered]["items"][0]
+    pay = d.orders[delivered]["payment_history"][0]["payment_method_id"]
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid) + [
+        {"name": "get_order_details", "arguments": {"order_id": pending}},
+        {"name": "get_order_details", "arguments": {"order_id": delivered}}]
+    writes = [
+        {"name": "cancel_pending_order", "arguments": {"order_id": pending, "reason": reason}},
+        {"name": "return_delivered_order_items",
+         "arguments": {"order_id": delivered, "item_ids": [item["item_id"]], "payment_method_id": pay}},
+    ]
+    scen = {"reason_for_call": (f"Two things: cancel order {pending}, it is {reason}, and return the "
+                                f"{item['name'].lower()} from order {delivered}."),
+            "known_info": known,
+            "task_instructions": user_sim.instructions(
+                rng, "You want the refund for the return on the original payment method.")}
+    return d, uid, pending, reads + writes, [f"Agent should cancel order {pending}.",
+                                             f"Agent should return the item from order {delivered}."], scen
+
+
+def case_address_then_payment(rng):
+    """Two different modifications to one pending order. Neither is the once-per-order items tool, so
+    both are allowed."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "paypal"])
+    oid = d.add_order(uid, "pending")
+    street, city, state, zipc = rng.choice(rdb.ADDRESSES)
+    suite = f"Suite {rng.randint(100, 999)}"
+    current = d.orders[oid]["payment_history"][0]["payment_method_id"]
+    target = next(p for p in d.users[uid]["payment_methods"] if p != current)
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
+    writes = [
+        {"name": "modify_pending_order_address",
+         "arguments": {"order_id": oid, "address1": street, "address2": suite, "city": city,
+                       "state": state, "country": "USA", "zip": zipc}},
+        {"name": "modify_pending_order_payment", "arguments": {"order_id": oid, "payment_method_id": target}},
+    ]
+    src = d.users[uid]["payment_methods"][target]["source"].replace("_", " ")
+    scen = {"reason_for_call": (f"On order {oid} you want the delivery address changed to {street}, {suite}, "
+                                f"{city}, {state} {zipc}, USA, and you want it charged to your {src} instead."),
+            "known_info": known,
+            "task_instructions": user_sim.instructions(rng, "Both changes are on that same order.")}
+    return d, uid, oid, reads + writes, ["Agent should change the shipping address of the order.",
+                                         "Agent should change the payment method of the order."], scen
+
+
+def case_exchange_then_profile_address(rng):
+    """An exchange on a delivered order plus a change to the profile address: two rules that touch
+    different records, which the policy keeps separate."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "gift_card"])
+    pid = d.add_product(n_variants=5)
+    oid = d.add_order(uid, "delivered", product_ids=[pid])
+    order = d.orders[oid]
+    old = order["items"][0]
+    alts = [v for v in d.variants(pid) if v["item_id"] != old["item_id"]]
+    if not alts:
+        raise BuildError("no alternative variant")
+    new = rng.choice(alts)
+    pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] == "credit_card")
+    street, city, state, zipc = rng.choice(rdb.ADDRESSES)
+    suite = f"Suite {rng.randint(100, 999)}"
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}] + _product_reads(d, oid)
+    writes = [
+        {"name": "exchange_delivered_order_items",
+         "arguments": {"order_id": oid, "item_ids": [old["item_id"]],
+                       "new_item_ids": [new["item_id"]], "payment_method_id": pay}},
+        {"name": "modify_user_address",
+         "arguments": {"user_id": uid, "address1": street, "address2": suite, "city": city,
+                       "state": state, "country": "USA", "zip": zipc}},
+    ]
+    want = ", ".join(f"{k} {v}" for k, v in new["options"].items())
+    scen = {"reason_for_call": (f"You want to exchange the {old['name'].lower()} from order {oid} for the one with "
+                                f"{want}, and you have moved, so your profile address should become {street}, {suite}, "
+                                f"{city}, {state} {zipc}, USA."),
+            "known_info": known,
+            "task_instructions": user_sim.instructions(
+                rng, "The address change is for your profile, not for any existing order. Settle any difference on the credit card on file.")}
+    return d, uid, oid, reads + writes, ["Agent should exchange the item.",
+                                         "Agent should update the address on the user profile."], scen
+
+
+def _describe(item: dict) -> str:
+    opts = ", ".join(f"{k} {v}" for k, v in list(item["options"].items())[:2])
+    return f"{item['name'].lower()} ({opts})"
+
+
+def case_return_unknown_order(rng):
+    """The user does not remember which order the item was in. The agent has to look through the
+    profile and open several orders to find it. The benchmark does this routinely; it is also where
+    `unknown_info` earns its place."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "gift_card"])
+    others = [d.add_order(uid, rng.choice(["delivered", "pending", "processed"])) for _ in range(2)]
+    target = d.add_order(uid, "delivered", n_items=rng.randint(2, 3))
+    item = d.orders[target]["items"][0]
+    pay = d.orders[target]["payment_history"][0]["payment_method_id"]
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid)
+    order_ids = others + [target]
+    rng.shuffle(order_ids)
+    reads += [{"name": "get_order_details", "arguments": {"order_id": o}} for o in order_ids]
+    writes = [{"name": "return_delivered_order_items",
+               "arguments": {"order_id": target, "item_ids": [item["item_id"]], "payment_method_id": pay}}]
+    scen = {"reason_for_call": f"You want to return the {_describe(item)} you ordered, but you do not remember which order it was in.",
+            "known_info": known,
+            "task_instructions": user_sim.instructions(
+                rng, "You can describe the item but not the order number. You want the refund on the original payment method.")}
+    return d, uid, target, reads + writes, [f"Agent should find the order and return the item."], scen
+
+
+def case_cancel_unknown_order(rng):
+    """Two open orders, and the user identifies the one to cancel by what is in it."""
+    d = rdb.RetailDB(rng)
+    uid = d.add_user(["credit_card", "gift_card"])
+    a = d.add_order(uid, "pending")
+    b = d.add_order(uid, "pending")
+    target = rng.choice([a, b])
+    item = d.orders[target]["items"][0]
+    reason = rng.choice(CANCEL_REASONS)
+    reads, known, _ = _auth(d, uid, rng)
+    reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": o}} for o in (a, b)]
+    writes = [{"name": "cancel_pending_order", "arguments": {"order_id": target, "reason": reason}}]
+    scen = {"reason_for_call": (f"You have two open orders and want to cancel the one with the "
+                                f"{_describe(item)} in it, it is {reason}. You do not remember the order number."),
+            "known_info": known,
+            "task_instructions": user_sim.instructions(
+                rng, "Only that one order should be cancelled, the other one you still want.")}
+    return d, uid, target, reads + writes, [f"Agent should cancel only order {target}."], scen
+
+
 CASES = [
-    Case("cancel_two_orders", case_cancel_two_orders, 5, "cancel"),
+    Case("cancel_two_orders", case_cancel_two_orders, 12, "cancel"),
+    Case("cancel_one_return_other", case_cancel_one_return_other, 15, "composite"),
+    Case("return_unknown_order", case_return_unknown_order, 20, "composite"),
+    Case("cancel_unknown_order", case_cancel_unknown_order, 16, "composite"),
+    Case("address_then_payment", case_address_then_payment, 6, "composite"),
+    Case("exchange_then_profile_address", case_exchange_then_profile_address, 6, "composite"),
     Case("exchange_two_items", case_exchange_two_items, 6, "exchange"),
     Case("cancel_pending", case_cancel_pending, 9, "cancel"),
     Case("cancel_delivered_denied", case_cancel_delivered_denied, 6, "refuse"),

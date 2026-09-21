@@ -113,3 +113,67 @@ def system_prompt(task_data: dict, use_tools: bool = True) -> str:
     tools = build_env().get_user_tools() if use_tools else None
     scenario = UserScenario.model_validate(task_data["user_scenario"])
     return UserSimulator(llm="none", instructions=scenario, tools=tools).system_prompt
+
+
+# ---------------------------------------------------------------------------
+# Composable user behaviour
+# ---------------------------------------------------------------------------
+# `task_instructions` is what steers the user simulator: how insistent the user is, when they volunteer
+# information, how they react to a refusal. One fixed string per case makes every rollout of that case
+# look alike, which is exactly what the diversity gates at fold time look for.
+#
+# Every clause below changes only *how* the user behaves, never what a correct outcome is, so the
+# expected actions and the database end state are untouched. Anything that could redirect the agent to
+# a different action (asking for a cheaper alternative, changing their mind about what they want) is
+# deliberately absent: that belongs in a case of its own, where the expected actions can follow.
+
+CONFIRM_CLAUSES = [
+    "Confirm as soon as the agent lists the details.",
+    "Before you agree, ask the agent to read the details back to you.",
+    "You confirm quickly and do not ask for a summary.",
+    "Ask the agent to spell out anything that will be charged before you say yes.",
+    "You say yes only after the agent has stated the details in full.",
+]
+DISCLOSURE_CLAUSES = [
+    "You answer only what you are asked and volunteer nothing else.",
+    "You tend to give more detail than you were asked for.",
+    "If the agent asks two things at once, you answer only the first one.",
+    "You say at the start that you are short on time.",
+    "You repeat your key details unprompted, in case they were missed.",
+]
+REFUSAL_CLAUSES = [
+    "If the agent says it cannot be done, accept it and end the conversation politely.",
+    "If the agent says it cannot be done, ask once whether anything else can be done, then accept.",
+    "If the agent says it cannot be done, push back once before you accept the answer.",
+    "If the agent refuses, ask which rule says so, and accept the explanation you are given.",
+    "If the agent refuses, say you understand and do not argue.",
+]
+TONE_CLAUSES = [
+    "You are friendly throughout.",
+    "You are businesslike and keep the conversation short.",
+    "You are a little anxious and ask for reassurance once.",
+    "You are mildly impatient if a step takes several messages.",
+    "You thank the agent when something is done.",
+    "",
+]
+
+
+def compose_behaviour(rng: random.Random, refusable: bool = True, n: int = 3) -> str:
+    """Two or three behaviour clauses drawn from different pools, in random order.
+
+    `refusable` decides whether a reaction-to-refusal clause is eligible; it only makes sense when the
+    scenario can plausibly be turned down."""
+    pools = [CONFIRM_CLAUSES, DISCLOSURE_CLAUSES, TONE_CLAUSES]
+    if refusable:
+        pools.append(REFUSAL_CLAUSES)
+    rng.shuffle(pools)
+    picked = [c for c in (rng.choice(p) for p in pools[:n]) if c]
+    rng.shuffle(picked)
+    return " ".join(picked)
+
+
+def instructions(rng: random.Random, core: str, refusable: bool = True) -> str:
+    """Case-specific constraints first, then composed behaviour. The core carries anything that bears on
+    what a correct outcome is; the behaviour carries none of it."""
+    tail = compose_behaviour(rng, refusable)
+    return f"{core.strip()} {tail}".strip()

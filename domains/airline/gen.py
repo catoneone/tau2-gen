@@ -106,10 +106,7 @@ def _cancel_case(rng, cabin, insurance, created, statuses, reason_word, eligible
     scenario = {
         "reason_for_call": f"You want to cancel reservation {rid}.{why}",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": ("You are polite but persistent. If the agent tells you the reservation cannot be "
-                              "cancelled, ask once whether anything can be done, then accept the answer."
-                              if not dec.allowed else
-                              "You are brief and cooperative. Confirm once the agent lists the cancellation details."),
+        "task_instructions": user_sim.instructions(rng, "", refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid) + status_reads + writes, [dec.detail], scenario
 
@@ -185,7 +182,7 @@ def case_change_flights(rng):
     scenario = {
         "reason_for_call": f"You want to move the outbound flight on reservation {rid} to {new_date}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "You want to keep the return flight as it is. Pay any difference with the card on file.",
+        "task_instructions": user_sim.instructions(rng, "You want to keep the return flight as it is. Pay any difference with the card on file."),
     }
     return d, uid, rid, reads + writes, [dec.detail], scenario
 
@@ -201,8 +198,7 @@ def case_change_flights_denied_basic_economy(rng):
     scenario = {
         "reason_for_call": f"You want to move your flight on reservation {rid} to a later date.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": ("If the agent says the reservation cannot be changed, ask whether upgrading the cabin "
-                              "would help, and accept the answer you are given. Do not ask to cancel."),
+        "task_instructions": user_sim.instructions(rng, "Do not ask to cancel the reservation."),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -222,7 +218,7 @@ def case_change_cabin(rng):
     scenario = {
         "reason_for_call": f"You want to upgrade reservation {rid} to {new_cabin.replace('_', ' ')}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "Keep the same flights and dates. You are willing to pay the difference with the card on file.",
+        "task_instructions": user_sim.instructions(rng, "Keep the same flights and dates. You are willing to pay the difference with the card on file."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -242,7 +238,7 @@ def case_baggage_add(rng):
     scenario = {
         "reason_for_call": f"You want to add checked bags to reservation {rid}, {total} in total.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "Ask what it will cost before you agree. Pay with the card on file.",
+        "task_instructions": user_sim.instructions(rng, "Pay with the card on file."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -257,7 +253,7 @@ def case_baggage_remove_denied(rng):
     scenario = {
         "reason_for_call": f"You want to remove the checked bags from reservation {rid} and get the money back.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "If the agent says bags cannot be removed, accept it and end the conversation politely.",
+        "task_instructions": user_sim.instructions(rng, "", refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -268,7 +264,7 @@ def case_insurance_add_denied(rng):
     scenario = {
         "reason_for_call": f"You want to add travel insurance to reservation {rid}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "You are willing to pay for it. If the agent refuses, ask once why, then accept.",
+        "task_instructions": user_sim.instructions(rng, "You are willing to pay for it.", refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -279,7 +275,7 @@ def case_passenger_count_denied(rng):
     scenario = {
         "reason_for_call": f"One of the two travellers on reservation {rid} can no longer come, so you want to drop them.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "If the agent says the number of passengers cannot change, ask whether a human agent could, then accept the answer.",
+        "task_instructions": user_sim.instructions(rng, "", refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -295,7 +291,7 @@ def case_passenger_change(rng):
         "reason_for_call": f"The second traveller on reservation {rid} changed, you want to put {new['first_name']} {new['last_name']} on it instead.",
         "known_info": (f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}. "
                        f"The new passenger is {new['first_name']} {new['last_name']}, born {new['dob']}."),
-        "task_instructions": "The number of travellers stays the same. Confirm when the agent lists the change.",
+        "task_instructions": user_sim.instructions(rng, "The number of travellers stays the same."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, ["Agent should replace the passenger without changing the number of passengers."], scenario
 
@@ -316,7 +312,7 @@ def case_compensation_cancelled_flight(rng):
     scenario = {
         "reason_for_call": f"The airline cancelled a flight on reservation {rid} and you want to be compensated for the trouble.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "You explicitly ask for compensation. You do not want to cancel the rest of the trip.",
+        "task_instructions": user_sim.instructions(rng, "You explicitly ask for compensation. You do not want to cancel the rest of the trip."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -334,7 +330,7 @@ def case_compensation_denied(rng):
     scenario = {
         "reason_for_call": f"Your flight on reservation {rid} is delayed and you want a travel certificate for it.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "You ask for compensation directly. If the agent says you are not eligible, ask once more, then accept.",
+        "task_instructions": user_sim.instructions(rng, "You ask for compensation directly.", refusable=True),
     }
     return d, uid, rid, _read_actions(uid, rid), [dec.detail], scenario
 
@@ -362,8 +358,7 @@ def case_book(rng):
     scenario = {
         "reason_for_call": f"You want to book a one way {cabin.replace('_', ' ')} flight from {o} to {dst} on {date} for {n_pax} traveller(s).",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": ("Pay with the credit card on file. You only want the free checked bags you are entitled to, "
-                              "and you do not want travel insurance."),
+        "task_instructions": user_sim.instructions(rng, "Pay with the credit card on file. You only want the free checked bags you are entitled to, and you do not want travel insurance."),
     }
     reads = [{"name": "get_user_details", "arguments": {"user_id": uid}},
              {"name": "search_direct_flight", "arguments": {"origin": o, "destination": dst, "date": date}}]
@@ -392,13 +387,145 @@ def case_cancel_two_reservations(rng):
     scenario = {
         "reason_for_call": f"You want to cancel both of your upcoming trips, reservations {rids[0]} and {rids[1]}.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": "Both should go. Confirm each one when the agent lists it.",
+        "task_instructions": user_sim.instructions(rng, "Both reservations should be cancelled."),
     }
     return d, uid, rids[0], reads + writes, nl, scenario
 
 
+# ---- composite cases: two or three rules inside one conversation ----
+def case_upgrade_then_baggage(rng):
+    """Upgrade the cabin, then add bags whose free allowance follows the *new* cabin. This is the shape
+    of benchmark tasks 17 and 22, and the reason the rule engine evaluates baggage post-upgrade."""
+    d, uid, rid = _modify_reservation(rng, rng.choice(["basic_economy", "economy"]))
+    res = d.reservations[rid]
+    dec_cabin = R.can_change_cabin(d.delta(), res)
+    if not dec_cabin.allowed:
+        raise BuildError(dec_cabin.reason)
+    new_cabin = "business" if res["cabin"] == "economy" else "economy"
+    after = {**res, "cabin": new_cabin}
+    free = R.free_baggage(d.delta(), after)
+    total = free + rng.randint(1, 2)
+    dec_bag = R.baggage_charge(d.delta(), after, total)
+    if not dec_bag.allowed:
+        raise BuildError(dec_bag.reason)
+    pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] in ("credit_card", "gift_card"))
+    writes = [
+        {"name": "update_reservation_flights",
+         "arguments": {"reservation_id": rid, "cabin": new_cabin,
+                       "flights": [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"]],
+                       "payment_id": pay}},
+        {"name": "update_reservation_baggages",
+         "arguments": {"reservation_id": rid, "total_baggages": total,
+                       "nonfree_baggages": dec_bag.extra["nonfree_baggages"], "payment_id": pay}},
+    ]
+    scenario = {
+        "reason_for_call": (f"For reservation {rid} you want two things: upgrade it to "
+                            f"{new_cabin.replace('_', ' ')}, and have {total} checked bags in total."),
+        "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(
+            rng, "Mention both things. Keep the same flights and dates, and pay with the card on file."),
+    }
+    return d, uid, rid, _read_actions(uid, rid) + writes, [dec_cabin.detail, dec_bag.detail], scenario
+
+
+def case_change_flights_then_baggage(rng):
+    """Move a flight and add bags in the same conversation."""
+    d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]))
+    res = d.reservations[rid]
+    dec = R.can_change_flights(d.delta(), res)
+    if not dec.allowed:
+        raise BuildError(dec.reason)
+    seg = res["flights"][0]
+    new_date = adb.future_date(rng, 3, 20)
+    alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
+    pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] in ("credit_card", "gift_card"))
+    new_flights = [{"flight_number": alts[0], "date": new_date}] + \
+                  [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"][1:]]
+    free = R.free_baggage(d.delta(), res)
+    total = free + rng.randint(1, 2)
+    dec_bag = R.baggage_charge(d.delta(), res, total)
+    writes = [
+        {"name": "update_reservation_flights",
+         "arguments": {"reservation_id": rid, "cabin": res["cabin"], "flights": new_flights, "payment_id": pay}},
+        {"name": "update_reservation_baggages",
+         "arguments": {"reservation_id": rid, "total_baggages": total,
+                       "nonfree_baggages": dec_bag.extra["nonfree_baggages"], "payment_id": pay}},
+    ]
+    reads = _read_actions(uid, rid) + [
+        {"name": "search_direct_flight", "arguments": {"origin": seg["origin"], "destination": seg["destination"], "date": new_date}}]
+    scenario = {
+        "reason_for_call": (f"On reservation {rid} you want to move the outbound flight to {new_date}, "
+                            f"and while the agent is at it, have {total} checked bags in total."),
+        "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(
+            rng, "The return flight stays as it is. Pay anything owed with the card on file."),
+    }
+    return d, uid, rid, reads + writes, [dec.detail, dec_bag.detail], scenario
+
+
+def case_cancel_then_compensation(rng):
+    """The airline cancelled a flight: the reservation may be cancelled, and the user who asks is owed a
+    certificate. Two rules, one conversation."""
+    d = adb.AirlineDB(rng)
+    uid = d.add_user(rng.choice(["silver", "gold"]), ["credit_card", "gift_card"])
+    o, dst = adb.city_pair(rng)
+    rid = d.add_reservation(uid, rng.choice(["economy", "business"]), "yes", adb.created_long_ago(rng),
+                            [(o, dst, adb.future_date(rng), "cancelled"), (dst, o, adb.future_date(rng), "available")],
+                            rng.randint(1, 3))
+    res = d.reservations[rid]
+    dec_c = R.can_cancel(d.delta(), res, "other")
+    dec_k = R.compensation(d.delta(), res, "cancelled_flight", user_asked=True, changed_or_cancelled=True)
+    if not (dec_c.allowed and dec_k.allowed):
+        raise BuildError(f"{dec_c.reason}/{dec_k.reason}")
+    writes = [{"name": "cancel_reservation", "arguments": {"reservation_id": rid}},
+              {"name": "send_certificate", "arguments": {"user_id": uid, "amount": dec_k.extra["amount"]}}]
+    scenario = {
+        "reason_for_call": (f"The airline cancelled a flight on reservation {rid}. You want the whole "
+                            f"reservation cancelled, and you want compensation for the trouble."),
+        "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(rng, "You ask for compensation explicitly, after the cancellation is done."),
+    }
+    return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid) + writes, [dec_c.detail, dec_k.detail], scenario
+
+
+def case_cancel_unknown_reservation(rng):
+    """The user knows the trip but not the reservation id, so the agent has to go through the profile.
+    Benchmark task 42 reads seven reservations before acting on two."""
+    d = adb.AirlineDB(rng)
+    uid = d.add_user(rng.choice(adb.MEMBERSHIPS), ["credit_card", "gift_card"])
+    rids = []
+    for i in range(3):
+        o, dst = adb.city_pair(rng)
+        cabin = "business" if i == 0 else rng.choice(["basic_economy", "economy"])
+        rids.append(d.add_reservation(uid, cabin, "no", adb.created_long_ago(rng),
+                                      [(o, dst, adb.future_date(rng), "available")], rng.randint(1, 2)))
+    target = rids[0]
+    res = d.reservations[target]
+    dec = R.can_cancel(d.delta(), res, "other")
+    if not dec.allowed:
+        raise BuildError(dec.reason)
+    seg = res["flights"][0]
+    reads = [{"name": "get_user_details", "arguments": {"user_id": uid}}]
+    order = rids[:]
+    rng.shuffle(order)
+    reads += [{"name": "get_reservation_details", "arguments": {"reservation_id": r}} for r in order]
+    writes = [{"name": "cancel_reservation", "arguments": {"reservation_id": target}}]
+    scenario = {
+        "reason_for_call": (f"You want to cancel the trip from {seg['origin']} to {seg['destination']} on "
+                            f"{seg['date']}. You do not remember the reservation number."),
+        "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(
+            rng, "Only that trip should be cancelled. Your other bookings stay as they are."),
+    }
+    return d, uid, target, reads + writes, [dec.detail], scenario
+
+
 CASES = [
-    Case("cancel_two_reservations", case_cancel_two_reservations, 5, "cancel"),
+    Case("cancel_two_reservations", case_cancel_two_reservations, 13, "cancel"),
+    Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 20, "composite"),
+    Case("upgrade_then_baggage", case_upgrade_then_baggage, 7, "composite"),
+    Case("change_flights_then_baggage", case_change_flights_then_baggage, 6, "composite"),
+    Case("cancel_then_compensation", case_cancel_then_compensation, 6, "composite"),
     Case("cancel_within_24h", case_cancel_within_24h, 6, "cancel"),
     Case("cancel_business", case_cancel_business, 6, "cancel"),
     Case("cancel_insurance_health", case_cancel_insurance_health, 6, "cancel"),

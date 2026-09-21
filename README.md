@@ -163,6 +163,36 @@ how the user talks, never what counts as success.
 data top-up amount drawn from 0.5–2 GB. The top-up matters: the environment assertion follows the
 number, so an agent that assumes the usual 2 GB fails.
 
+## User behaviour is composed, not templated
+
+`task_instructions` is what steers the user simulator: how insistent the user is, when they volunteer
+information, how they react to being turned down. One fixed string per case makes every rollout of that
+case look alike, which is exactly what a diversity gate would catch. So it is assembled per task from
+independent pools in [`common/user_sim.py`](common/user_sim.py) — confirmation style, disclosure pace,
+reaction to refusal, tone — shuffled and combined.
+
+Every clause changes only *how* the user behaves, never what a correct outcome is, so the expected
+actions and the target database state are untouched. Anything that could redirect the agent to a
+different action, such as asking for a cheaper alternative or changing their mind about what they want,
+is deliberately absent: that belongs in a case of its own, where the expected actions can follow.
+
+Airline and retail also carry composite cases, which is how the benchmark's own scenarios look. Two
+rules in one conversation (upgrade the cabin and then add bags, where the free allowance follows the
+*new* cabin), two entities in one conversation (cancel one order and return an item from another), and
+scenarios where the user cannot name the record at all and the agent has to search the profile for it.
+
+Measured against the benchmark's own task files:
+
+| | airline gen | airline ref | retail gen | retail ref |
+|---|---|---|---|---|
+| distinct `task_instructions` | 0.99 | 0.98 | 0.99 | 0.61 |
+| pairwise Jaccard on those | 0.27 | 0.15 | 0.26 | 0.09 |
+| tasks touching ≥2 records | 16 % | 18 % | 43 % | 56 % |
+
+Uniqueness matches or beats the reference. Two gaps remain and are worth knowing about: lexical overlap
+is higher, because clauses are drawn from fixed pools rather than written fresh per task; and retail
+still spans fewer records per task than its hand-written reference.
+
 ## Not copying the benchmark
 
 Two separate guarantees, both enforced before anything is written to disk.
