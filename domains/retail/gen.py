@@ -50,8 +50,10 @@ class BuildError(Exception):
 
 
 class Case:
-    def __init__(self, name: str, fn: Callable, weight: float, group: str):
+    def __init__(self, name: str, fn: Callable, weight: float, group: str, single_record: bool = True):
         self.name, self.fn, self.weight, self.group = name, fn, weight, group
+        # Whether the unknown-id axis applies: it needs exactly one target record the scenario names.
+        self.single_record = single_record
 
 
 def _auth(d: rdb.RetailDB, uid: str, rng: random.Random) -> tuple[list[dict], str, str]:
@@ -93,6 +95,57 @@ def _setup(rng: random.Random, status: str, n_items: int = 2, payment_sources=No
     uid = d.add_user(payment_sources or ["credit_card", "gift_card"])
     oid = d.add_order(uid, status, n_items=n_items)
     return d, uid, oid
+
+
+def _describe(item: dict) -> str:
+    opts = ", ".join(f"{k} {v}" for k, v in list(item["options"].items())[:2])
+    return f"{item['name'].lower()} ({opts})"
+
+
+# ---------------------------------------------------------------------------
+# Account history and the unknown-id axis
+# ---------------------------------------------------------------------------
+# Two properties that cut across every case rather than belonging to any one of them: real customers
+# have more than one order, and they often cannot quote the order number. When they cannot, the correct
+# trajectory really does open several orders to find the right one, which is what lifts the number of
+# records a task touches. The DB check ignores reads, so neither property changes how a task is scored.
+
+def add_history(d, uid: str, rng: random.Random, n: tuple[int, int] = (1, 3)) -> list[str]:
+    """Extra orders for this user, none of which is the task's target."""
+    return [d.add_order(uid, rng.choice(["delivered", "cancelled", "processed", "pending"]))
+            for _ in range(rng.randint(*n))]
+
+
+def hide_id(scen: dict, d, uid: str, oid: str, reads: list[dict], rng: random.Random) -> tuple[dict, list[dict]]:
+    """Replace the order id with a description of what is in it, and make the reference trajectory look
+    through the profile. Returns everything unchanged if the id cannot be removed cleanly, so a task
+    never claims the user does not know something the text still spells out."""
+    items = d.orders[oid]["items"]
+    reason = scen["reason_for_call"]
+    if oid not in reason:
+        return scen, reads
+    # Anchor the order on something the sentence does not already name, so it does not read
+    # "return the running shoes from the order with the running shoes in it".
+    unnamed = [it for it in items if it["name"].lower() not in reason.lower()]
+    if unnamed:
+        desc = f"the order with the {_describe(unnamed[0])} in it"
+    elif len(items) > 1:
+        desc = "the order it came in"
+    else:
+        desc = "the order it came in"
+    reason = reason.replace(f"order {oid}", desc).replace(oid, desc)
+    if oid in reason:
+        return scen, reads
+    scen = dict(scen)
+    scen["reason_for_call"] = reason + " You do not remember the order number."
+    all_oids = list(d.users[uid]["orders"])
+    rng.shuffle(all_oids)
+    auth = [a for a in reads if a["name"] in ("find_user_id_by_email", "find_user_id_by_name_zip")]
+    lookups = auth + [{"name": "get_user_details", "arguments": {"user_id": uid}}]
+    lookups += [{"name": "get_order_details", "arguments": {"order_id": o}} for o in all_oids]
+    tail = [a for a in reads if a["name"] not in
+            ("find_user_id_by_email", "find_user_id_by_name_zip", "get_user_details", "get_order_details")]
+    return scen, lookups + tail
 
 
 # ---- cancel ----
@@ -436,11 +489,6 @@ def case_exchange_then_profile_address(rng):
                                          "Agent should update the address on the user profile."], scen
 
 
-def _describe(item: dict) -> str:
-    opts = ", ".join(f"{k} {v}" for k, v in list(item["options"].items())[:2])
-    return f"{item['name'].lower()} ({opts})"
-
-
 def case_return_unknown_order(rng):
     """The user does not remember which order the item was in. The agent has to look through the
     profile and open several orders to find it. The benchmark does this routinely; it is also where
@@ -486,12 +534,12 @@ def case_cancel_unknown_order(rng):
 
 
 CASES = [
-    Case("cancel_two_orders", case_cancel_two_orders, 12, "cancel"),
-    Case("cancel_one_return_other", case_cancel_one_return_other, 15, "composite"),
-    Case("return_unknown_order", case_return_unknown_order, 20, "composite"),
-    Case("cancel_unknown_order", case_cancel_unknown_order, 16, "composite"),
+    Case("cancel_two_orders", case_cancel_two_orders, 12, "cancel", single_record=False),
+    Case("cancel_one_return_other", case_cancel_one_return_other, 15, "composite", single_record=False),
+    Case("return_unknown_order", case_return_unknown_order, 10, "composite", single_record=False),
+    Case("cancel_unknown_order", case_cancel_unknown_order, 8, "composite", single_record=False),
     Case("address_then_payment", case_address_then_payment, 6, "composite"),
-    Case("exchange_then_profile_address", case_exchange_then_profile_address, 6, "composite"),
+    Case("exchange_then_profile_address", case_exchange_then_profile_address, 6, "composite", single_record=False),
     Case("exchange_two_items", case_exchange_two_items, 6, "exchange"),
     Case("cancel_pending", case_cancel_pending, 9, "cancel"),
     Case("cancel_delivered_denied", case_cancel_delivered_denied, 6, "refuse"),
@@ -504,13 +552,20 @@ CASES = [
     Case("return_pending_denied", case_return_pending_denied, 5, "refuse"),
     Case("exchange_delivered", case_exchange_delivered, 9, "exchange"),
     Case("exchange_unavailable_denied", case_exchange_unavailable_denied, 5, "refuse"),
-    Case("modify_user_address", case_modify_user_address, 5, "profile"),
-    Case("other_user_denied", case_other_user_denied, 4, "refuse"),
+    Case("modify_user_address", case_modify_user_address, 5, "profile", single_record=False),
+    Case("other_user_denied", case_other_user_denied, 4, "refuse", single_record=False),
 ]
 
 
-def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random) -> tuple[dict, dict]:
+def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random,
+               history: bool = True, unknown_id: bool = False) -> tuple[dict, dict]:
     d, uid, oid, raw_actions, nl, scen = case.fn(rng)
+    hid = False
+    if history and uid in d.users:
+        add_history(d, uid, rng)
+    if unknown_id and case.single_record and oid:
+        scen, raw_actions = hide_id(scen, d, uid, oid, raw_actions, rng)
+        hid = oid not in scen["reason_for_call"]
     persona_text = user_sim.render_persona(persona_name, rng, "555-555-0100") if persona_name != "None" else None
     name = f"[{case.name}][PERSONA:{persona_name}][GEN:{tag}]"
     writes = [a for a in raw_actions if a["name"] not in READ_TOOLS]
@@ -533,6 +588,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
+            "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("orders", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "order_id": oid, "delta_bytes": len(json.dumps(d.delta()))}
     return data, meta
@@ -561,6 +617,21 @@ def verify_task(data: dict) -> Optional[str]:
     return None
 
 
+def quotas(n: int, weights: list[float]) -> list[int]:
+    """Largest-remainder allocation, so the realised case mix matches the intended one exactly.
+
+    Drawing each task independently leaves the mix to chance: at n=150 the share of any one group
+    moves by about eight points across runs, which makes `--refuse-share` a suggestion rather than a
+    setting. Quotas make it a setting."""
+    tot = sum(weights)
+    raw = [n * w / tot for w in weights]
+    out = [int(x) for x in raw]
+    rem = n - sum(out)
+    for i in sorted(range(len(raw)), key=lambda i: -(raw[i] - out[i]))[:rem]:
+        out[i] += 1
+    return out
+
+
 def rebalance(cases: list, refuse_share: float | None) -> list[float]:
     """Weights, optionally renormalised so the `refuse` group takes a target share of the set."""
     w = [c.weight for c in cases]
@@ -576,17 +647,27 @@ def rebalance(cases: list, refuse_share: float | None) -> list[float]:
     return w
 
 
-def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = None, verbose: bool = False):
+def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = None,
+             unknown_id_share: float = 0.45, verbose: bool = False):
     rng = random.Random(seed)
     weights = rebalance(CASES, refuse_share)
+    left = quotas(n, weights)
     records, metas, stats = [], [], Counter()
     idx, attempts = 0, 0
     while len(records) < n and attempts < n * 60:
         attempts += 1
-        case = rng.choices(CASES, weights=weights, k=1)[0]
+        avail = [i for i, q in enumerate(left) if q > 0]
+        if not avail:
+            left = quotas(n - len(records), weights) if len(records) < n else []
+            avail = [i for i, q in enumerate(left) if q > 0]
+            if not avail:
+                break
+        ci = rng.choices(avail, weights=[left[i] for i in avail], k=1)[0]
+        case = CASES[ci]
         persona = user_sim.sample_persona(rng, persona_mix)
         try:
-            data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng)
+            data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng,
+                                    history=True, unknown_id=rng.random() < unknown_id_share)
         except BuildError as e:
             stats[f"build_fail:{case.name}"] += 1
             if verbose:
@@ -600,6 +681,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
             continue
         records.append(schema.episode_record(data))
         metas.append(meta)
+        left[ci] -= 1
         idx += 1
         stats["kept"] += 1
     return records, metas, dict(stats)
@@ -613,13 +695,15 @@ def main() -> None:
     ap.add_argument("--persona-mix", default=None)
     ap.add_argument("--refuse-share", type=float, default=0.09,
                     help="share of tasks whose correct answer is to do nothing (tau2-bench retail: 0.09)")
+    ap.add_argument("--unknown-id-share", type=float, default=0.45,
+                    help="share of single-record tasks where the user cannot quote the order number")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     mix = json.loads(a.persona_mix) if a.persona_mix else {"None": 0.5, "Easy": 0.08, "Hard": 0.08, "Verbose": 0.06,
                                                            "Terse": 0.06, "NonNative": 0.06, "Impatient": 0.06,
                                                            "WrongNumberOnce": 0.04, "SideRequest": 0.03, "TechSavvy": 0.03}
     t0 = time.time()
-    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.verbose)
+    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.unknown_id_share, a.verbose)
     print(f"generated {len(records)} retail tasks in {time.time() - t0:.1f}s; stats={stats}")
 
     from fidelity.leakage import check as leakage_check
@@ -650,6 +734,8 @@ def main() -> None:
         "group_hist": dict(Counter(m["group"] for m in metas)),
         "persona_hist": dict(Counter(m["persona"] for m in metas)),
         "no_write_tasks": sum(1 for m in metas if m["n_writes"] == 0),
+        "unknown_id_tasks": sum(1 for m in metas if m.get("unknown_id")),
+        "records_per_user_median": sorted(m.get("n_user_records", 0) for m in metas)[len(metas) // 2] if metas else 0,
         "write_names": dict(Counter(w for m in metas for w in m["write_names"])),
         "median_delta_bytes": sorted(m["delta_bytes"] for m in metas)[len(metas) // 2] if metas else 0,
         "leakage": leak,

@@ -181,17 +181,34 @@ rules in one conversation (upgrade the cabin and then add bags, where the free a
 *new* cabin), two entities in one conversation (cancel one order and return an item from another), and
 scenarios where the user cannot name the record at all and the agent has to search the profile for it.
 
+Two further properties cut across every case rather than belonging to any one of them, so they are
+applied by the generator rather than written into cases:
+
+**Account history.** Every user gets a few extra records beyond the one the task is about. It costs
+nothing in the reference trajectory, and it stops every profile from looking identical.
+
+**The unknown-id axis.** Real customers often cannot quote the record number. Any single-record case can
+have its identifier removed from the scenario and replaced with a description of the record, at which
+point the correct trajectory really does read through the profile to find it. The share is a knob,
+`--unknown-id-share`. A task never claims the user has forgotten something the text still spells out:
+the substitution is checked, and is abandoned if the id cannot be removed cleanly.
+
+Case mixes are allocated by quota rather than drawn independently, so `--refuse-share` and the rest are
+settings rather than suggestions. Drawn independently at n=150, any one group moved by about eight
+points between runs.
+
 Measured against the benchmark's own task files:
 
 | | airline gen | airline ref | retail gen | retail ref |
 |---|---|---|---|---|
-| distinct `task_instructions` | 0.99 | 0.98 | 0.99 | 0.61 |
-| pairwise Jaccard on those | 0.27 | 0.15 | 0.26 | 0.09 |
-| tasks touching ≥2 records | 16 % | 18 % | 43 % | 56 % |
+| distinct `task_instructions` | 0.99 | 0.98 | 1.00 | 0.61 |
+| pairwise Jaccard on those | 0.25 | 0.15 | 0.26 | 0.09 |
+| tasks touching ≥2 records | 21 % | 18 % | 61 % | 56 % |
+| records per task, median | 1 | 1 | 2 | 2 |
+| tasks with no correct write | 49 % | 48 % | 8 % | 9 % |
 
-Uniqueness matches or beats the reference. Two gaps remain and are worth knowing about: lexical overlap
-is higher, because clauses are drawn from fixed pools rather than written fresh per task; and retail
-still spans fewer records per task than its hand-written reference.
+One gap remains and is worth knowing about: lexical overlap on the instructions is higher than the
+reference, because clauses are drawn from fixed pools rather than written fresh for every task.
 
 ## Not copying the benchmark
 

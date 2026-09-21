@@ -55,8 +55,11 @@ class BuildError(Exception):
 # A case builds a database delta and returns what the agent is expected to do with it.
 # --------------------------------------------------------------------------------------
 class Case:
-    def __init__(self, name: str, fn: Callable, weight: float, group: str):
+    def __init__(self, name: str, fn: Callable, weight: float, group: str, single_record: bool = True):
         self.name, self.fn, self.weight, self.group = name, fn, weight, group
+        # Whether the unknown-id axis applies: it needs exactly one target record that the scenario
+        # names. Booking has no record yet, and the multi-record cases already span several.
+        self.single_record = single_record
 
 
 def _read_actions(uid: str, rid: Optional[str], with_user: bool = True) -> list[dict]:
@@ -80,6 +83,60 @@ def _status_reads(d, rid: str) -> list[dict]:
 def _acts(raw: list[dict]) -> list[schema.Action]:
     return [schema.Action(action_id=f"{a['name']}_{i}", requestor="assistant", name=a["name"],
                           arguments=a["arguments"]) for i, a in enumerate(raw)]
+
+
+# ---------------------------------------------------------------------------
+# Account history and the unknown-id axis
+# ---------------------------------------------------------------------------
+# Two structural properties that cut across every case, rather than belonging to any one of them:
+#
+#   1. Real customers have more than one booking. Giving each user a few extra reservations costs
+#      nothing in the reference trajectory (the agent still acts on one) but stops every profile from
+#      looking identical, and gives a careless agent something to get wrong.
+#   2. Customers often cannot quote the record number. When they cannot, the correct trajectory really
+#      does read several reservations to find the right one, which is what lifts the number of records
+#      a task touches. Turning that into an axis applied to any single-record case, instead of two
+#      bespoke cases, is what makes the spread reach the reference set's.
+#
+# The DB check ignores reads, so neither property changes how a task is scored.
+
+def add_history(d, uid: str, rng: random.Random, n: tuple[int, int] = (1, 3)) -> list[str]:
+    """Extra reservations for this user, none of which is the task's target."""
+    out = []
+    for _ in range(rng.randint(*n)):
+        o, dst = adb.city_pair(rng)
+        out.append(d.add_reservation(uid, rng.choice(adb.CABINS), rng.choice(["yes", "no"]),
+                                     adb.created_long_ago(rng),
+                                     [(o, dst, adb.future_date(rng), "available")], rng.randint(1, 2)))
+    return out
+
+
+def describe_reservation(res: dict) -> str:
+    f = res["flights"][0]
+    return f"the trip from {f['origin']} to {f['destination']} on {f['date']}"
+
+
+def hide_id(scen: dict, d, uid: str, rid: str, reads: list[dict], rng: random.Random) -> tuple[dict, list[dict]]:
+    """Replace the reservation id in the scenario with a description, and make the reference trajectory
+    look through the profile instead of jumping straight to the record.
+
+    Returns the scenario and reads unchanged if the id cannot be removed cleanly, so a task never
+    claims the user does not know something that the text still spells out."""
+    desc = describe_reservation(d.reservations[rid])
+    reason = scen["reason_for_call"]
+    if rid not in reason:
+        return scen, reads
+    reason = reason.replace(f"reservation {rid}", desc).replace(rid, desc)
+    if rid in reason:
+        return scen, reads
+    scen = dict(scen)
+    scen["reason_for_call"] = reason + " You do not remember the reservation number."
+    all_rids = list(d.users[uid]["reservations"])
+    rng.shuffle(all_rids)
+    lookups = [{"name": "get_user_details", "arguments": {"user_id": uid}}]
+    lookups += [{"name": "get_reservation_details", "arguments": {"reservation_id": r}} for r in all_rids]
+    tail = [a for a in reads if a["name"] not in ("get_user_details", "get_reservation_details")]
+    return scen, lookups + tail
 
 
 # ---- cancellation ----
@@ -521,8 +578,8 @@ def case_cancel_unknown_reservation(rng):
 
 
 CASES = [
-    Case("cancel_two_reservations", case_cancel_two_reservations, 13, "cancel"),
-    Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 20, "composite"),
+    Case("cancel_two_reservations", case_cancel_two_reservations, 13, "cancel", single_record=False),
+    Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 10, "composite", single_record=False),
     Case("upgrade_then_baggage", case_upgrade_then_baggage, 7, "composite"),
     Case("change_flights_then_baggage", case_change_flights_then_baggage, 6, "composite"),
     Case("cancel_then_compensation", case_cancel_then_compensation, 6, "composite"),
@@ -542,12 +599,19 @@ CASES = [
     Case("passenger_change", case_passenger_change, 4, "modify"),
     Case("compensation_cancelled_flight", case_compensation_cancelled_flight, 5, "compensation"),
     Case("compensation_denied", case_compensation_denied, 5, "refuse"),
-    Case("book", case_book, 8, "book"),
+    Case("book", case_book, 8, "book", single_record=False),
 ]
 
 
-def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random) -> tuple[dict, dict]:
+def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Random,
+               history: bool = True, unknown_id: bool = False) -> tuple[dict, dict]:
     d, uid, rid, raw_actions, nl, scen = case.fn(rng)
+    hid = False
+    if history and uid in d.users:
+        add_history(d, uid, rng)
+    if unknown_id and case.single_record and rid:
+        scen, raw_actions = hide_id(scen, d, uid, rid, raw_actions, rng)
+        hid = rid not in scen["reason_for_call"]
     persona_text = user_sim.render_persona(persona_name, rng, "555-555-0100") if persona_name != "None" else None
     name = f"[{case.name}][PERSONA:{persona_name}][GEN:{tag}]"
     writes = [a for a in raw_actions if a["name"] not in
@@ -572,6 +636,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
+            "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "reservation_id": rid, "delta_bytes": len(json.dumps(d.delta()))}
     return data, meta
@@ -603,6 +668,21 @@ def verify_task(data: dict) -> Optional[str]:
     return None
 
 
+def quotas(n: int, weights: list[float]) -> list[int]:
+    """Largest-remainder allocation, so the realised case mix matches the intended one exactly.
+
+    Drawing each task independently leaves the mix to chance: at n=150 the share of any one group
+    moves by about eight points across runs, which makes `--refuse-share` a suggestion rather than a
+    setting. Quotas make it a setting."""
+    tot = sum(weights)
+    raw = [n * w / tot for w in weights]
+    out = [int(x) for x in raw]
+    rem = n - sum(out)
+    for i in sorted(range(len(raw)), key=lambda i: -(raw[i] - out[i]))[:rem]:
+        out[i] += 1
+    return out
+
+
 def rebalance(cases: list, refuse_share: float | None) -> list[float]:
     """Weights, optionally renormalised so the `refuse` group takes a target share of the set.
 
@@ -622,18 +702,27 @@ def rebalance(cases: list, refuse_share: float | None) -> list[float]:
 
 
 def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = None,
-             verbose: bool = False) -> tuple[list[dict], list[dict], dict]:
+             unknown_id_share: float = 0.10, verbose: bool = False) -> tuple[list[dict], list[dict], dict]:
     rng = random.Random(seed)
     weights = rebalance(CASES, refuse_share)
+    left = quotas(n, weights)
     records, metas, stats = [], [], Counter()
     idx = 0
     attempts = 0
     while len(records) < n and attempts < n * 60:
         attempts += 1
-        case = rng.choices(CASES, weights=weights, k=1)[0]
+        avail = [i for i, q in enumerate(left) if q > 0]
+        if not avail:
+            left = quotas(n - len(records), weights) if len(records) < n else []
+            avail = [i for i, q in enumerate(left) if q > 0]
+            if not avail:
+                break
+        ci = rng.choices(avail, weights=[left[i] for i in avail], k=1)[0]
+        case = CASES[ci]
         persona = user_sim.sample_persona(rng, persona_mix)
         try:
-            data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng)
+            data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng,
+                                    history=True, unknown_id=rng.random() < unknown_id_share)
         except BuildError as e:
             stats[f"build_fail:{case.name}"] += 1
             if verbose:
@@ -647,6 +736,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
             continue
         records.append(schema.episode_record(data))
         metas.append(meta)
+        left[ci] -= 1
         idx += 1
         stats["kept"] += 1
     return records, metas, dict(stats)
@@ -660,13 +750,15 @@ def main() -> None:
     ap.add_argument("--persona-mix", default=None)
     ap.add_argument("--refuse-share", type=float, default=0.48,
                     help="share of tasks whose correct answer is to do nothing (tau2-bench airline: 0.48)")
+    ap.add_argument("--unknown-id-share", type=float, default=0.10,
+                    help="share of single-record tasks where the user cannot quote the record number")
     ap.add_argument("--verbose", action="store_true")
     a = ap.parse_args()
     mix = json.loads(a.persona_mix) if a.persona_mix else {"None": 0.5, "Easy": 0.08, "Hard": 0.08, "Verbose": 0.06,
                                                            "Terse": 0.06, "NonNative": 0.06, "Impatient": 0.06,
                                                            "WrongNumberOnce": 0.04, "SideRequest": 0.03, "TechSavvy": 0.03}
     t0 = time.time()
-    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.verbose)
+    records, metas, stats = generate(a.n, a.seed, mix, a.refuse_share, a.unknown_id_share, a.verbose)
     print(f"generated {len(records)} airline tasks in {time.time() - t0:.1f}s; stats={dict(stats)}")
 
     from fidelity.leakage import check as leakage_check
@@ -697,6 +789,8 @@ def main() -> None:
         "group_hist": dict(Counter(m["group"] for m in metas)),
         "persona_hist": dict(Counter(m["persona"] for m in metas)),
         "no_write_tasks": sum(1 for m in metas if m["n_writes"] == 0),
+        "unknown_id_tasks": sum(1 for m in metas if m.get("unknown_id")),
+        "records_per_user_median": sorted(m.get("n_user_records", 0) for m in metas)[len(metas) // 2] if metas else 0,
         "write_names": dict(Counter(w for m in metas for w in m["write_names"])),
         "median_delta_bytes": sorted(m["delta_bytes"] for m in metas)[len(metas) // 2] if metas else 0,
         "leakage": leak,
