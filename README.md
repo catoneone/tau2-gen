@@ -82,6 +82,28 @@ said: a probe run scored a task zero whose database check passed and whose certi
 because the request said "be compensated" while the anchor was "compensation" and the word appeared
 only in the instructions.
 
+## Make the agent decide, not execute
+
+A reference run put nine airline and eleven retail case types at a pass rate of exactly 1.00. They were
+not hard, and reweighting them away would only have hidden that. The account held one record, it was the
+record the user named, and the rule applied to it unconditionally: the agent had to execute, not decide.
+
+The reference set's own hardest category is the opposite shape. Its teacher scores 0.20 on cancellation,
+and those tasks hand the agent several bookings and ask for all of them, so the rule has to be applied
+one reservation at a time and the ineligible ones left alone. So:
+
+- **Mixed eligibility.** The user asks to cancel every upcoming trip; some qualify and some do not, and
+  the expected actions are still unique because the rules decide which. What the agent cannot do is act
+  on the request as a whole.
+- **Arithmetic instead of lookup.** A reservation already carries bags and the user asks for *more*, so
+  the free allowance has to be worked out per passenger and added to what is there, rather than read off
+  the table.
+- **Denial on the evidence.** The user is eligible for compensation and asks for it, but no flight in the
+  reservation was cancelled. That branch of the rule engine existed and no case had ever reached it.
+- **Near misses.** The account holds another order with the same products in the state the rule cares
+  about, and an order carries the same product twice in different variants, so naming the product is not
+  enough to identify the item.
+
 ## Pin the answer, or the task has no answer
 
 A request the generator can satisfy more than one way is not a hard task, it is a broken one. The

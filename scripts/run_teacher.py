@@ -34,6 +34,22 @@ from common.tau2_compat import require_tau2  # noqa: E402
 require_tau2()
 
 
+# litellm decides how to call a model from the prefix before the first slash. A name without one is
+# unqualified; a name *with* one is not necessarily qualified, because HuggingFace-style ids carry a slash
+# of their own (`Qwen/Qwen3.8-27B`, `zai-org/GLM-5.2-TEE`). Treating any slash as a provider left those
+# names unprefixed and every call failed with "LLM Provider NOT provided", so the prefix is checked
+# against the providers litellm actually knows.
+LITELLM_PROVIDERS = {
+    "openai", "azure", "azure_ai", "anthropic", "bedrock", "vertex_ai", "gemini", "mistral", "cohere",
+    "groq", "deepseek", "fireworks_ai", "together_ai", "openrouter", "ollama", "hosted_vllm", "vllm",
+    "xai", "perplexity", "cerebras", "sambanova", "nvidia_nim", "databricks", "watsonx", "custom_openai",
+}
+
+
+def _has_provider(model: str) -> bool:
+    return model.split("/", 1)[0] in LITELLM_PROVIDERS
+
+
 def user_simulator_config(a: argparse.Namespace) -> tuple[str, dict]:
     """(litellm model string, llm_args) for the customer simulator.
 
@@ -48,7 +64,7 @@ def user_simulator_config(a: argparse.Namespace) -> tuple[str, dict]:
     if a.user_max_tokens:
         args["max_tokens"] = a.user_max_tokens
     if a.user_api_base:
-        if "/" not in model:
+        if not _has_provider(model):
             model = f"openai/{model}"
         key = os.environ.get(a.user_api_key_var)
         if not key:

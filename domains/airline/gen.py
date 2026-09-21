@@ -452,10 +452,17 @@ def case_change_cabin(rng):
 
 
 def case_baggage_add(rng):
-    d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]))
+    # The reservation usually already carries bags, and the user asks for N *more*. The agent then has
+    # to add to what is there and work the free allowance out per passenger, rather than read one number
+    # off the allowance table: the version of this case where the reservation started empty and the user
+    # named a total passed 5 out of 5 in a reference run.
+    d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]), n_pax=rng.randint(1, 3))
     res = d.reservations[rid]
     free = R.free_baggage(d.delta(), res)
-    total = free + rng.randint(1, 2)
+    existing = rng.choice([0, 1, 2]) if free > 0 else 0
+    res["total_baggages"] = existing
+    more = rng.randint(1, 3)
+    total = existing + more
     dec = R.baggage_charge(d.delta(), res, total)
     if not dec.allowed:
         raise BuildError(dec.reason)
@@ -464,7 +471,8 @@ def case_baggage_add(rng):
                "arguments": {"reservation_id": rid, "total_baggages": total,
                              "nonfree_baggages": dec.extra["nonfree_baggages"], "payment_id": pay}}]
     scenario = {
-        "reason_for_call": f"You want to add checked bags to reservation {rid}, {total} in total.",
+        "reason_for_call": (f"You want to add {more} more checked bag(s) to reservation {rid}"
+                            + (f", which already has {existing}." if existing else ".")),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the card on file."),
     }
@@ -831,9 +839,101 @@ def case_composed(rng):
     return d, uid, results[0][1].rid, reads + writes, nl, scenario
 
 
+# ---------------------------------------------------------------------------
+# Cases that require a decision, not an execution
+# ---------------------------------------------------------------------------
+# A reference run put nine airline case types at a pass rate of exactly 1.00. They were not hard: the
+# account held one record, it was the record the user named, and the rule applied to it unconditionally.
+# The agent had to execute, not decide.
+#
+# What the reference set's own hardest category looks like is the opposite: its teacher scores 0.20 on
+# cancellation, and those tasks hand the agent several bookings and ask for all of them, so the rule has
+# to be applied one reservation at a time and the ineligible ones left alone.
+
+def case_cancel_mixed_eligibility(rng):
+    """Several upcoming bookings, only some cancellable, and the user asks for all of them.
+
+    The expected actions are still unique: the rules decide exactly which reservations may go. What the
+    agent cannot do is act on the request as a whole."""
+    d = adb.AirlineDB(rng)
+    uid = d.add_user(rng.choice(adb.MEMBERSHIPS), ["credit_card", "gift_card"])
+    plan = ["eligible"] * rng.randint(1, 2) + ["ineligible"] * rng.randint(1, 2)
+    if rng.random() < 0.5:
+        plan.append(rng.choice(["eligible", "ineligible"]))
+    rng.shuffle(plan)
+    rids, eligible, nl = [], [], []
+    for kind in plan:
+        o, dst = adb.city_pair(rng)
+        if kind == "eligible":
+            style = rng.choice(["business", "recent", "airline_cancelled"])
+            cabin = "business" if style == "business" else rng.choice(["basic_economy", "economy"])
+            created = adb.created_within_24h(rng) if style == "recent" else adb.created_long_ago(rng)
+            statuses = ["cancelled", "available"] if style == "airline_cancelled" else ["available"]
+        else:
+            cabin, created, statuses = rng.choice(["basic_economy", "economy"]), adb.created_long_ago(rng), ["available"]
+        segs = []
+        oo, dd = o, dst
+        for st in statuses:
+            segs.append((oo, dd, adb.future_date(rng), st))
+            oo, dd = dd, oo
+        rid = d.add_reservation(uid, cabin, "no", created, segs, rng.randint(1, 2))
+        dec = R.can_cancel(d.delta(), d.reservations[rid], "other")
+        if dec.allowed != (kind == "eligible"):
+            raise BuildError(f"reservation came out {dec.reason}, wanted {kind}")
+        rids.append(rid)
+        if dec.allowed:
+            eligible.append(rid)
+            nl.append(f"Agent should cancel reservation {rid} because {dec.reason.replace('_', ' ')}.")
+        else:
+            nl.append(f"Agent should not cancel reservation {rid}: it meets no cancellation condition.")
+    if not eligible or len(eligible) == len(rids):
+        raise BuildError("this case needs both kinds")
+    reads = [{"name": "get_user_details", "arguments": {"user_id": uid}}]
+    reads += [{"name": "get_reservation_details", "arguments": {"reservation_id": r}} for r in rids]
+    writes = [{"name": "cancel_reservation", "arguments": {"reservation_id": r}} for r in eligible]
+    name = d.users[uid]["name"]
+    scenario = {
+        "reason_for_call": f"You want to cancel all {len(rids)} of your upcoming trips.",
+        "known_info": f"You are {name['first_name']} {name['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(
+            rng, n=2, core=("Even if the agent says some of them cannot be refunded, you still want everything "
+                            "cancelled that can be. You do not know which of them qualify."), refusable=True),
+        "_decision": None,
+    }
+    return d, uid, rids[0], reads + writes, nl, scenario
+
+
+def case_compensation_facts_denied(rng):
+    """The user is eligible for compensation and asks for it, but the facts do not support the claim:
+    no flight in the reservation was cancelled. Denial on the evidence rather than on membership, which
+    is the branch the single-condition denial case never reached."""
+    d = adb.AirlineDB(rng)
+    uid = d.add_user(rng.choice(["silver", "gold"]), ["credit_card", "gift_card"])
+    o, dst = adb.city_pair(rng)
+    rid = d.add_reservation(uid, rng.choice(["economy", "business"]), "yes", adb.created_long_ago(rng),
+                            [(o, dst, adb.future_date(rng), "available"),
+                             (dst, o, adb.future_date(rng), "available")], rng.randint(1, 3))
+    dec = R.compensation(d.delta(), d.reservations[rid], "cancelled_flight", user_asked=True, changed_or_cancelled=True)
+    if dec.allowed or dec.reason != "facts_not_confirmed":
+        raise BuildError(f"wanted facts_not_confirmed, got {dec.reason}")
+    name = d.users[uid]["name"]
+    scenario = {
+        "reason_for_call": (f"You believe the airline cancelled a flight on reservation {rid} and you want "
+                            f"compensation for it."),
+        "known_info": f"You are {name['first_name']} {name['last_name']}. Your user id is {uid}.",
+        "task_instructions": user_sim.instructions(
+            rng, n=2, core=("You are sure you remember a cancellation. If the agent checks and tells you none of "
+                            "your flights was cancelled, accept it."), refusable=True),
+        "_decision": None,
+    }
+    return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
+
+
 CASES = [
     Case("composed", case_composed, 130, "composite", single_record=False),
-    Case("cancel_two_reservations", case_cancel_two_reservations, 13, "cancel", single_record=False),
+    Case("cancel_two_reservations", case_cancel_two_reservations, 5, "cancel", single_record=False),
+    Case("cancel_mixed_eligibility", case_cancel_mixed_eligibility, 22, "cancel", single_record=False),
+    Case("compensation_facts_denied", case_compensation_facts_denied, 8, "refuse"),
     Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 10, "composite", single_record=False),
     Case("upgrade_then_baggage", case_upgrade_then_baggage, 7, "composite"),
     Case("change_flights_then_baggage", case_change_flights_then_baggage, 6, "composite"),

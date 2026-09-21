@@ -148,6 +148,15 @@ def _setup(rng: random.Random, status: str, n_items: int = 2, payment_sources=No
     return d, uid, oid
 
 
+def _near_miss(d, uid: str, rng: random.Random, status: str, product_ids: list[str]) -> str:
+    """Another order of the user's holding the same products, in the state the rule cares about.
+
+    A task where the account holds exactly one order, and it is the order the user named, asks the agent
+    to execute rather than to decide: a reference run passed eleven retail case types at exactly 1.00.
+    A near-miss makes the agent check which record the rule actually applies to."""
+    return d.add_order(uid, status, product_ids=list(product_ids))
+
+
 def _describe(item: dict) -> str:
     opts = ", ".join(f"{k} {v}" for k, v in list(item["options"].items())[:2])
     return f"{item['name'].lower()} ({opts})"
@@ -202,6 +211,7 @@ def hide_id(scen: dict, d, uid: str, oid: str, reads: list[dict], rng: random.Ra
 # ---- cancel ----
 def case_cancel_pending(rng):
     d, uid, oid = _setup(rng, "pending")
+    _near_miss(d, uid, rng, "delivered", [i["product_id"] for i in d.orders[oid]["items"]])
     reason = rng.choice(CANCEL_REASONS)
     reads, known, _ = _auth(d, uid, rng)
     reads += _profile_read(uid) + [{"name": "get_order_details", "arguments": {"order_id": oid}}]
@@ -258,8 +268,12 @@ def case_modify_items(rng):
     d = rdb.RetailDB(rng)
     uid = d.add_user(["credit_card", "gift_card"])
     pid = d.add_product(n_variants=5)
-    oid = d.add_order(uid, "pending", product_ids=[pid, d.add_product()])
+    # The order carries the same product twice, in different variants, so naming the product is not
+    # enough: the agent has to match the item the user described and leave its twin alone.
+    oid = d.add_order(uid, "pending", product_ids=[pid, pid, d.add_product()])
     order = d.orders[oid]
+    if order["items"][0]["item_id"] == order["items"][1]["item_id"]:
+        raise BuildError("the two copies came out identical")
     old = order["items"][0]
     alts = [v for v in d.variants(pid) if v["item_id"] != old["item_id"]]
     if not alts:
@@ -272,7 +286,9 @@ def case_modify_items(rng):
                "arguments": {"order_id": oid, "item_ids": [old["item_id"]],
                              "new_item_ids": [new["item_id"]], "payment_method_id": pay}}]
     want = ", ".join(f"{k} {v}" for k, v in new["options"].items())
-    scen = {"reason_for_call": f"On order {oid} you picked the wrong item: the {old['name'].lower()}. You want the one with {want} instead.",
+    have = ", ".join(f"{k} {v}" for k, v in old["options"].items())
+    scen = {"reason_for_call": (f"On order {oid} you picked the wrong item: the {old['name'].lower()} "
+                                f"you ordered as {have}. You want that one as {want} instead."),
             "known_info": known,
             "task_instructions": user_sim.instructions(rng, n=1, core="That is the only change you want. If the agent asks whether anything else on the order should change, say no. Pay any difference with the credit card on file.")}
     return d, uid, oid, reads + writes, ["Agent should modify the item on the pending order."], scen
@@ -306,6 +322,8 @@ def case_modify_delivered_denied(rng):
 def case_return_delivered(rng):
     d, uid, oid = _setup(rng, "delivered", n_items=rng.randint(2, 3))
     order = d.orders[oid]
+    # Same products, still pending: returnable only from the delivered one.
+    _near_miss(d, uid, rng, "pending", [i["product_id"] for i in order["items"]])
     items = [order["items"][0]["item_id"]]
     pay = order["payment_history"][0]["payment_method_id"]
     reads, known, _ = _auth(d, uid, rng)
