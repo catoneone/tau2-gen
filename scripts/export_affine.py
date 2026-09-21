@@ -90,6 +90,12 @@ def main() -> None:
                     help="τ² split whose ids must not appear in the export (default base = the benchmark tasks); '' to skip")
     ap.add_argument("--name-prefix", default="tau2g-")
     ap.add_argument("--system-prompt", default=None, help="optional system message stored on every record")
+    ap.add_argument("--reward-basis", default=None,
+                    help="override every task's reward_basis, comma-separated (e.g. DB or DB,COMMUNICATE); "
+                         "dropping NL_ASSERTION also clears nl_assertions so no rollout can call the LLM judge")
+    ap.add_argument("--require-communicate-info", action="store_true",
+                    help="refuse to export a task with no correct write (a refusal) whose communicate_info is empty — "
+                         "under [DB, COMMUNICATE] such a task passes on silence")
     a = ap.parse_args()
 
     tasks = load_task_list(Path(a.tasks))
@@ -98,6 +104,21 @@ def main() -> None:
     if collisions:
         raise SystemExit(f"refusing to export: {len(collisions)} task id(s) collide with τ² {a.domain}/{a.exclude_split}: "
                          f"{collisions[:3]}...")
+    if a.reward_basis:
+        basis = [b.strip() for b in a.reward_basis.split(",") if b.strip()]
+        for t in tasks:
+            ec = t.setdefault("evaluation_criteria", {}) or {}
+            ec["reward_basis"] = basis
+            if "NL_ASSERTION" not in basis:
+                ec["nl_assertions"] = None
+            t["evaluation_criteria"] = ec
+    if a.require_communicate_info:
+        silent = [t["id"] for t in tasks
+                  if not any(x.get("name", "").startswith(("update_", "cancel_", "book_", "send_", "modify_", "return_", "exchange_", "transfer_", "refuel", "resume", "suspend", "enable", "disable", "toggle", "set_", "reset", "make_", "add_", "remove_", "reactivate", "change_"))
+                             for x in ((t.get("evaluation_criteria") or {}).get("actions") or []))
+                  and not ((t.get("evaluation_criteria") or {}).get("communicate_info"))]
+        if silent:
+            raise SystemExit(f"refusing to export: {len(silent)} no-write task(s) have no communicate_info (would pass on silence): {silent[:3]}...")
     without_db = sum(1 for t in tasks if not ((t.get("initial_state") or {}).get("initialization_data")))
     records = [to_affine_record(t, i, a.domain, a.name_prefix, a.system_prompt) for i, t in enumerate(tasks)]
     manifest = json.loads(Path(a.manifest).read_text()) if a.manifest else None
@@ -108,6 +129,7 @@ def main() -> None:
             "generator": "catoneone/tau2-gen", "tau2_gen_commit": repo_commit(), "tau2_bench_commit": tau2_commit(),
             "tasks_file": str(a.tasks), "manifest": manifest,
             "held_out_split": a.exclude_split or None, "held_out_ids_checked": len(held),
+            "reward_basis_override": a.reward_basis, "require_communicate_info": a.require_communicate_info,
         },
         "n": len(records),
         "n_without_initialization_data": without_db,
