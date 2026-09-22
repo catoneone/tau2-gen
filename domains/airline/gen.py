@@ -56,11 +56,19 @@ class BuildError(Exception):
 # A case builds a database delta and returns what the agent is expected to do with it.
 # --------------------------------------------------------------------------------------
 class Case:
-    def __init__(self, name: str, fn: Callable, weight: float, group: str, single_record: bool = True):
+    def __init__(self, name: str, fn: Callable, weight: float, group: str, single_record: bool = True,
+                 history: bool = True, validate: Optional[Callable] = None):
         self.name, self.fn, self.weight, self.group = name, fn, weight, group
         # Whether the unknown-id axis applies: it needs exactly one target record that the scenario
         # names. Booking has no record yet, and the multi-record cases already span several.
         self.single_record = single_record
+        # Whether the shared history filler may add reservations. A case whose request ranges over
+        # *every* record the user holds has to own its own distractors, because a filler reservation
+        # that happens to satisfy the rule would make the expected action list wrong.
+        self.history = history
+        # An optional check run on the finished task. A case whose request ranges over every record
+        # the user holds cannot state its expected actions until the database is final.
+        self.validate = validate
 
 
 def _read_actions(uid: str, rid: Optional[str], with_user: bool = True) -> list[dict]:
@@ -456,13 +464,24 @@ def case_baggage_add(rng):
     # to add to what is there and work the free allowance out per passenger, rather than read one number
     # off the allowance table: the version of this case where the reservation started empty and the user
     # named a total passed 5 out of 5 in a reference run.
-    d, uid, rid = _modify_reservation(rng, rng.choice(["economy", "business"]), n_pax=rng.randint(1, 3))
+    d, uid, rid = _modify_reservation(rng, rng.choice(adb.CABINS), n_pax=rng.randint(1, 3))
     res = d.reservations[rid]
     free = R.free_baggage(d.delta(), res)
-    existing = rng.choice([0, 1, 2]) if free > 0 else 0
+    existing = rng.randint(0, free) if free > 0 else 0
     res["total_baggages"] = existing
-    more = rng.randint(1, 3)
-    total = existing + more
+    # The request has to land near the free allowance or the allowance table never gets consulted: the
+    # earlier version drew `more` independently, so a gold member in business (8 free) was asked for 2
+    # bags and "no charge" was right without doing the arithmetic. Both generated tasks came out that
+    # way. The regime is picked first and the request derived from it, so the boundary is exercised.
+    regime = rng.choices(["over", "at", "under"], weights=[6, 2, 2])[0]
+    if regime == "over":
+        total = free + rng.randint(1, 3)
+    elif regime == "at":
+        total = free
+    else:
+        total = rng.randint(existing, free) if free > existing else free
+    total = max(total, existing + 1)      # the user is adding, so at least one bag has to be new
+    more = total - existing
     dec = R.baggage_charge(d.delta(), res, total)
     if not dec.allowed:
         raise BuildError(dec.reason)
@@ -857,11 +876,12 @@ def case_cancel_mixed_eligibility(rng):
     agent cannot do is act on the request as a whole."""
     d = adb.AirlineDB(rng)
     uid = d.add_user(rng.choice(adb.MEMBERSHIPS), ["credit_card", "gift_card"])
-    plan = ["eligible"] * rng.randint(1, 2) + ["ineligible"] * rng.randint(1, 2)
+    # The filler is off for this case, so the distractors are built here, under the same rule check.
+    plan = ["eligible"] * rng.randint(1, 2) + ["ineligible"] * rng.randint(2, 4)
     if rng.random() < 0.5:
         plan.append(rng.choice(["eligible", "ineligible"]))
     rng.shuffle(plan)
-    rids, eligible, nl = [], [], []
+    rids, eligible, nl, told = [], [], [], []
     for kind in plan:
         o, dst = adb.city_pair(rng)
         if kind == "eligible":
@@ -878,6 +898,10 @@ def case_cancel_mixed_eligibility(rng):
             oo, dd = dd, oo
         rid = d.add_reservation(uid, cabin, "no", created, segs, rng.randint(1, 2))
         dec = R.can_cancel(d.delta(), d.reservations[rid], "other")
+        if kind == "eligible" and style == "airline_cancelled":
+            # A cancelled flight lives in the flights table, and no read tool shows it to the agent:
+            # policy.md has the agent *ask* for the reason. So the caller has to know this one.
+            told.append(f"The airline cancelled one of the flights on reservation {rid}.")
         if dec.allowed != (kind == "eligible"):
             raise BuildError(f"reservation came out {dec.reason}, wanted {kind}")
         rids.append(rid)
@@ -894,7 +918,7 @@ def case_cancel_mixed_eligibility(rng):
     name = d.users[uid]["name"]
     scenario = {
         "reason_for_call": f"You want to cancel all {len(rids)} of your upcoming trips.",
-        "known_info": f"You are {name['first_name']} {name['last_name']}. Your user id is {uid}.",
+        "known_info": " ".join([f"You are {name['first_name']} {name['last_name']}. Your user id is {uid}."] + told),
         "task_instructions": user_sim.instructions(
             rng, n=2, core=("Even if the agent says some of them cannot be refunded, you still want everything "
                             "cancelled that can be. You do not know which of them qualify."), refusable=True),
@@ -929,10 +953,25 @@ def case_compensation_facts_denied(rng):
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
 
 
+def check_all_cancellable_are_expected(d, uid: str, raw_actions: list[dict]) -> None:
+    """Every reservation the rules would let go must be in the expected actions, and no other.
+
+    A request phrased over the whole account ("cancel all my trips") is only well posed if the
+    expected action list is closed under the rule. It was not: the history filler could add a
+    business-cabin reservation, which the rule allows and the list did not name, so an agent that
+    got it right scored zero."""
+    allowed = {rid for rid in d.users[uid]["reservations"]
+               if R.can_cancel(d.delta(), d.reservations[rid], "other").allowed}
+    expected = {a["arguments"]["reservation_id"] for a in raw_actions if a["name"] == "cancel_reservation"}
+    if allowed != expected:
+        raise BuildError(f"cancellable set {sorted(allowed)} != expected {sorted(expected)}")
+
+
 CASES = [
     Case("composed", case_composed, 130, "composite", single_record=False),
     Case("cancel_two_reservations", case_cancel_two_reservations, 5, "cancel", single_record=False),
-    Case("cancel_mixed_eligibility", case_cancel_mixed_eligibility, 22, "cancel", single_record=False),
+    Case("cancel_mixed_eligibility", case_cancel_mixed_eligibility, 22, "cancel", single_record=False,
+         history=False, validate=check_all_cancellable_are_expected),
     Case("compensation_facts_denied", case_compensation_facts_denied, 8, "refuse"),
     Case("cancel_unknown_reservation", case_cancel_unknown_reservation, 10, "composite", single_record=False),
     Case("upgrade_then_baggage", case_upgrade_then_baggage, 7, "composite"),
@@ -947,7 +986,7 @@ CASES = [
     Case("change_flights", case_change_flights, 10, "modify"),
     Case("change_flights_denied_basic_economy", case_change_flights_denied_basic_economy, 8, "refuse"),
     Case("change_cabin", case_change_cabin, 8, "modify"),
-    Case("baggage_add", case_baggage_add, 7, "modify"),
+    Case("baggage_add", case_baggage_add, 16, "modify"),
     Case("baggage_remove_denied", case_baggage_remove_denied, 4, "refuse"),
     Case("insurance_add_denied", case_insurance_add_denied, 4, "refuse"),
     Case("passenger_count_denied", case_passenger_count_denied, 4, "refuse"),
@@ -964,8 +1003,10 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     # The rule reason, when the case recorded one, so a well-attested reason string can be added.
     dec = scen.pop("_decision", None)
     hid = False
-    if history and uid in d.users:
+    if history and case.history and uid in d.users:
         add_history(d, uid, rng)
+    if case.validate:
+        case.validate(d, uid, raw_actions)
     if unknown_id and case.single_record and rid:
         scen, raw_actions = hide_id(scen, d, uid, rid, raw_actions, rng)
         hid = rid not in scen["reason_for_call"]
