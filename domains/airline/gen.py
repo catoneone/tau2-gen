@@ -261,6 +261,7 @@ TOPIC_ANCHOR = {
     "insurance_add_denied": "insurance",
     "passenger_change": "passenger", "passenger_count_denied": "passenger",
     "compensation_cancelled_flight": "compensation", "compensation_denied": "certificate",
+    "compensation_facts_denied": "compensation", "cancel_mixed_eligibility": "cancel",
     "book": "book",
 }
 # Added on top of the topic anchor only where the rule reason itself is well attested.
