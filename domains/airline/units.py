@@ -212,7 +212,6 @@ def u_passenger_count_denied(d, uid, rng, rid=None) -> UnitResult:
 
 def u_compensation_ok(d, uid, rng, rid=None) -> UnitResult:
     if rid is None:
-        d.users[uid]["membership"] = rng.choice(["silver", "gold"])
         o, dst = adb.city_pair(rng)
         rid = d.add_reservation(uid, rng.choice(["economy", "business"]), "yes", adb.created_long_ago(rng),
                                 [(o, dst, adb.future_date(rng), "cancelled"),
@@ -228,7 +227,6 @@ def u_compensation_ok(d, uid, rng, rid=None) -> UnitResult:
 
 def u_compensation_denied(d, uid, rng, rid=None) -> UnitResult:
     if rid is None:
-        d.users[uid]["membership"] = "regular"
         o, dst = adb.city_pair(rng)
         rid = d.add_reservation(uid, rng.choice(["basic_economy", "economy"]), "no",
                                 adb.created_long_ago(rng), [(o, dst, adb.future_date(rng), "delayed")],
@@ -258,6 +256,27 @@ ACTION_UNITS = {"cancel_ok", "change_flights_ok", "change_cabin_ok", "baggage_ad
 
 # Ordered pairs that act on one record instead of two. These are the combinations where the first
 # rule changes what the second one computes, so an agent cannot treat them independently.
+# What a unit needs the *user* to be. A unit used to set this itself, which silently invalidated any
+# earlier unit that had already read it: composing baggage_add with compensation_ok moved the member
+# from regular to gold after the free allowance had been worked out, so the expected number of paid
+# bags was stale and an agent that computed it correctly scored zero. The composer now resolves these
+# before any unit runs, and a combination with no membership in common is simply not drawn.
+REQUIRES_MEMBERSHIP: dict[str, tuple[str, ...]] = {
+    "compensation_ok": ("silver", "gold"),
+    "compensation_denied": ("regular",),
+}
+
+
+def required_memberships(names: tuple[str, ...]) -> list[str]:
+    """The memberships that satisfy every unit in the combination, in table order."""
+    out = list(adb.MEMBERSHIPS)
+    for n in names:
+        req = REQUIRES_MEMBERSHIP.get(n)
+        if req:
+            out = [m for m in out if m in req]
+    return out
+
+
 SHARED_RECORD: list[tuple[str, str]] = [
     ("change_cabin_ok", "baggage_add"),     # the free allowance follows the new cabin
     ("change_flights_ok", "baggage_add"),   # same reservation, two chargeable changes
@@ -275,6 +294,8 @@ INCOMPATIBLE: set[frozenset] = {
 
 
 def compatible(names: tuple[str, ...]) -> bool:
+    if not required_memberships(names):
+        return False
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             if frozenset({a, b}) in INCOMPATIBLE:

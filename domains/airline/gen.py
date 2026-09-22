@@ -467,20 +467,30 @@ def case_baggage_add(rng):
     d, uid, rid = _modify_reservation(rng, rng.choice(adb.CABINS), n_pax=rng.randint(1, 3))
     res = d.reservations[rid]
     free = R.free_baggage(d.delta(), res)
-    existing = rng.randint(0, free) if free > 0 else 0
-    res["total_baggages"] = existing
     # The request has to land near the free allowance or the allowance table never gets consulted: the
-    # earlier version drew `more` independently, so a gold member in business (8 free) was asked for 2
-    # bags and "no charge" was right without doing the arithmetic. Both generated tasks came out that
-    # way. The regime is picked first and the request derived from it, so the boundary is exercised.
-    regime = rng.choices(["over", "at", "under"], weights=[6, 2, 2])[0]
+    # earlier version drew the number of bags independently, so a gold member in business (eight free)
+    # was asked for two and "no charge" was right without doing the arithmetic. Both generated tasks
+    # came out that way. The regime is picked first and the request derived from it.
+    #
+    # "under" and "at" are kept in the mix on purpose. If every baggage task ended in a charge, "always
+    # charge" would score as well as reading the table, and that is the shortcut this case exists to
+    # deny. They are only drawable when the allowance leaves room for them.
+    regimes, weights = ["over"], [6]
+    if free >= 1:
+        regimes.append("at"); weights.append(2)
+    if free >= 2:
+        regimes.append("under"); weights.append(2)
+    regime = rng.choices(regimes, weights=weights)[0]
     if regime == "over":
+        existing = rng.randint(0, free)
         total = free + rng.randint(1, 3)
     elif regime == "at":
+        existing = rng.randint(0, free - 1)
         total = free
     else:
-        total = rng.randint(existing, free) if free > existing else free
-    total = max(total, existing + 1)      # the user is adding, so at least one bag has to be new
+        existing = rng.randint(0, free - 2)
+        total = rng.randint(existing + 1, free - 1)
+    res["total_baggages"] = existing
     more = total - existing
     dec = R.baggage_charge(d.delta(), res, total)
     if not dec.allowed:
@@ -805,6 +815,9 @@ def case_composed(rng):
             break
     if names is None:
         raise BuildError("no compatible unit combination")
+    # Settled before any unit runs, because more than one unit reads it and a unit that set it itself
+    # invalidated whatever an earlier unit had already computed from it.
+    d.users[uid]["membership"] = rng.choice(U.required_memberships(names))
 
     # If a declared shared-record pair is present, build it in its declared order on one reservation.
     order = list(names)
@@ -953,6 +966,30 @@ def case_compensation_facts_denied(rng):
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
 
 
+def check_baggage_matches_rule(d, raw_actions: list[dict]) -> None:
+    """Every expected baggage write must agree with the allowance as it stands at that point.
+
+    The allowance depends on the booking user's membership, the cabin and the passenger count, and a
+    composed task can change the first two before the baggage write happens. Working the number out
+    when the unit was built rather than where the write lands left five of seventeen expectations
+    stale, and a stale one is worse than a missing task: the agent that reads the table correctly is
+    the one that scores zero."""
+    db = d.delta()
+    cabins = {rid: r["cabin"] for rid, r in d.reservations.items()}
+    for a in raw_actions:
+        arg = a.get("arguments", {})
+        rid = arg.get("reservation_id")
+        if a["name"] == "update_reservation_flights" and rid in cabins and arg.get("cabin"):
+            cabins[rid] = arg["cabin"]                      # a cabin change moves the allowance
+        elif a["name"] == "update_reservation_baggages" and rid in cabins:
+            res = dict(d.reservations[rid], cabin=cabins[rid])
+            free = R.free_baggage(db, res)
+            want = max(0, arg["total_baggages"] - free)
+            if want != arg["nonfree_baggages"]:
+                raise BuildError(f"{rid}: {arg['total_baggages']} bags with {free} free means "
+                                 f"{want} paid, expected action says {arg['nonfree_baggages']}")
+
+
 def check_all_cancellable_are_expected(d, uid: str, raw_actions: list[dict]) -> None:
     """Every reservation the rules would let go must be in the expected actions, and no other.
 
@@ -1005,6 +1042,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     hid = False
     if history and case.history and uid in d.users:
         add_history(d, uid, rng)
+    check_baggage_matches_rule(d, raw_actions)
     if case.validate:
         case.validate(d, uid, raw_actions)
     if unknown_id and case.single_record and rid:
