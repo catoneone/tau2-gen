@@ -417,7 +417,7 @@ def case_change_flights(rng):
         "reason_for_call": (f"You want to move the outbound flight on reservation {rid} to flight "
                             f"{chosen} on {new_date}, the one departing {dep}."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, n=2, core="You want to keep the return flight as it is. Pay any difference with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You want to keep the return flight as it is."),
     }
     return d, uid, rid, reads + writes, [dec.detail], scenario
 
@@ -454,7 +454,7 @@ def case_change_cabin(rng):
     scenario = {
         "reason_for_call": f"You want to move reservation {rid} up to the {new_cabin.replace('_', ' ')} cabin.",
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, n=2, core="Keep the same flights and dates. You are willing to pay the difference with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="Keep the same flights and dates. You are willing to pay the difference."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -503,7 +503,7 @@ def case_baggage_add(rng):
         "reason_for_call": (f"You want to add {more} more checked bag(s) to reservation {rid}"
                             + (f", which already has {existing}." if existing else ".")),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
-        "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the card on file."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You are willing to pay for any bags over your allowance."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec.detail], scenario
 
@@ -632,7 +632,7 @@ def case_book(rng):
                             f"{dep}, in {cabin.replace('_', ' ')}, for {n_pax} passenger(s)."),
         "known_info": (f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. "
                        f"Your user id is {uid}." + (f" The other passenger is {others}." if others else "")),
-        "task_instructions": user_sim.instructions(rng, n=2, core="Pay with the credit card on file. You only want the free checked bags you are entitled to, and you do not want travel insurance."),
+        "task_instructions": user_sim.instructions(rng, n=2, core="You only want the free checked bags you are entitled to, and you do not want travel insurance."),
     }
     reads = [{"name": "get_user_details", "arguments": {"user_id": uid}},
              {"name": "search_direct_flight", "arguments": {"origin": o, "destination": dst, "date": date}}]
@@ -697,7 +697,7 @@ def case_upgrade_then_baggage(rng):
                             f"{new_cabin.replace('_', ' ')} cabin, and have {total} checked bags in total."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(
-            rng, "Mention both things. Keep the same flights and dates, and pay with the card on file."),
+            rng, "Mention both things. Keep the same flights and dates."),
     }
     return d, uid, rid, _read_actions(uid, rid) + writes, [dec_cabin.detail, dec_bag.detail], scenario
 
@@ -735,7 +735,7 @@ def case_change_flights_then_baggage(rng):
                             f"{total} checked bags in total."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(
-            rng, "The return flight stays as it is. Pay anything owed with the card on file."),
+            rng, "The return flight stays as it is."),
     }
     return d, uid, rid, reads + writes, [dec.detail, dec_bag.detail], scenario
 
@@ -1025,8 +1025,10 @@ def name_payment_method(d, uid: str, raw_actions: list[dict], scen: dict) -> Non
         else:
             phrases.append(f"your {m['source'].replace('_', ' ')} ending {pid[-4:]}")
     if phrases:
-        scen["task_instructions"] = (scen["task_instructions"].rstrip() + " Pay with "
-                                     + " and ".join(phrases) + ".")
+        # First, not last: it follows the request the customer came with, and a payment clause parked
+        # after the persona's own quirks competes with them for the simulator's attention.
+        scen["task_instructions"] = ("Pay with " + " and ".join(phrases) + ". "
+                                     + scen["task_instructions"].lstrip())
 
 
 def check_baggage_matches_rule(d, raw_actions: list[dict]) -> None:
