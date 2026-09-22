@@ -99,7 +99,9 @@ def u_change_flights_ok(d, uid, rng, rid=None) -> UnitResult:
     if not dec.allowed:
         raise UnitError(dec.reason)
     seg = res["flights"][0]
-    new_date = adb.future_date(rng, 3, 20)
+    new_date = adb.date_before(rng, res["flights"][1]["date"] if len(res["flights"]) > 1 else None, 3, 20)
+    if new_date is None:
+        raise UnitError("no date leaves the outbound before the return")
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
     dep = d.flights[alts[0]]["scheduled_departure_time_est"][:5]
     flights = [{"flight_number": alts[0], "date": new_date}] + \

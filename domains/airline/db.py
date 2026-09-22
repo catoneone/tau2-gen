@@ -177,6 +177,21 @@ def future_date(rng: random.Random, lo: int = 2, hi: int = 14) -> str:
     return (NOW + dt.timedelta(days=rng.randint(lo, hi))).strftime("%Y-%m-%d")
 
 
+def date_before(rng: random.Random, limit: Optional[str], lo: int = 2, hi: int = 20) -> Optional[str]:
+    """A future date strictly before `limit`, or None when no such date exists.
+
+    Moving an outbound segment has to leave the trip in order. Drawing the new date freely produced a
+    reservation whose outbound left three days after the return, and the agent that refused to book it
+    was reading the itinerary correctly."""
+    if limit is None:
+        return future_date(rng, lo, hi)
+    days = (dt.datetime.strptime(limit, "%Y-%m-%d") - NOW).days
+    hi = min(hi, days - 1)
+    if hi < lo:
+        return None
+    return future_date(rng, lo, hi)
+
+
 def past_date(rng: random.Random, lo: int = 2, hi: int = 12) -> str:
     return (NOW - dt.timedelta(days=rng.randint(lo, hi))).strftime("%Y-%m-%d")
 

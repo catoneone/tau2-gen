@@ -401,7 +401,9 @@ def case_change_flights(rng):
     if not dec.allowed:
         raise BuildError(dec.reason)
     seg = res["flights"][0]
-    new_date = adb.future_date(rng, 3, 20)
+    new_date = adb.date_before(rng, res["flights"][1]["date"] if len(res["flights"]) > 1 else None, 3, 20)
+    if new_date is None:
+        raise BuildError("no date leaves the outbound before the return")
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
     chosen = alts[0]
     dep = d.flights[chosen]["scheduled_departure_time_est"][:5]
@@ -710,7 +712,9 @@ def case_change_flights_then_baggage(rng):
     if not dec.allowed:
         raise BuildError(dec.reason)
     seg = res["flights"][0]
-    new_date = adb.future_date(rng, 3, 20)
+    new_date = adb.date_before(rng, res["flights"][1]["date"] if len(res["flights"]) > 1 else None, 3, 20)
+    if new_date is None:
+        raise BuildError("no date leaves the outbound before the return")
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
     chosen = alts[0]
     dep = d.flights[chosen]["scheduled_departure_time_est"][:5]
@@ -969,6 +973,19 @@ def case_compensation_facts_denied(rng):
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
 
 
+def check_itinerary_stays_in_order(raw_actions: list[dict]) -> None:
+    """An expected flight change must leave the trip in date order.
+
+    Drawing the new outbound date freely produced a reservation whose outbound left three days after
+    the return, and the agent refused to book it, which was the right reading of the itinerary."""
+    for a in raw_actions:
+        if a["name"] != "update_reservation_flights":
+            continue
+        dates = [f["date"] for f in a["arguments"].get("flights", [])]
+        if dates != sorted(dates):
+            raise BuildError(f"expected itinerary is out of order: {dates}")
+
+
 def check_new_flights_are_named(d, raw_actions: list[dict], scen: dict) -> None:
     """A flight the agent has to book must be named in the request.
 
@@ -1107,6 +1124,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     hid = False
     if history and case.history and uid in d.users:
         add_history(d, uid, rng)
+    check_itinerary_stays_in_order(raw_actions)
     check_new_flights_are_named(d, raw_actions, scen)
     name_payment_method(d, uid, raw_actions, scen)
     check_baggage_matches_rule(d, raw_actions)
