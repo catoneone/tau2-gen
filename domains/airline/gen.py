@@ -712,8 +712,10 @@ def case_change_flights_then_baggage(rng):
     seg = res["flights"][0]
     new_date = adb.future_date(rng, 3, 20)
     alts = d.add_alternative_flights(seg["origin"], seg["destination"], new_date, 2, len(res["passengers"]))
+    chosen = alts[0]
+    dep = d.flights[chosen]["scheduled_departure_time_est"][:5]
     pay = next(p for p, m in d.users[uid]["payment_methods"].items() if m["source"] in ("credit_card", "gift_card"))
-    new_flights = [{"flight_number": alts[0], "date": new_date}] + \
+    new_flights = [{"flight_number": chosen, "date": new_date}] + \
                   [{"flight_number": f["flight_number"], "date": f["date"]} for f in res["flights"][1:]]
     free = R.free_baggage(d.delta(), res)
     total = free + rng.randint(1, 2)
@@ -728,8 +730,9 @@ def case_change_flights_then_baggage(rng):
     reads = _read_actions(uid, rid) + [
         {"name": "search_direct_flight", "arguments": {"origin": seg["origin"], "destination": seg["destination"], "date": new_date}}]
     scenario = {
-        "reason_for_call": (f"On reservation {rid} you want to move the outbound flight to {new_date}, "
-                            f"and while the agent is at it, have {total} checked bags in total."),
+        "reason_for_call": (f"On reservation {rid} you want to move the outbound flight to flight {chosen} "
+                            f"on {new_date}, the one departing {dep}, and while the agent is at it, have "
+                            f"{total} checked bags in total."),
         "known_info": f"You are {d.users[uid]['name']['first_name']} {d.users[uid]['name']['last_name']}. Your user id is {uid}.",
         "task_instructions": user_sim.instructions(
             rng, "The return flight stays as it is. Pay anything owed with the card on file."),
@@ -966,6 +969,28 @@ def case_compensation_facts_denied(rng):
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
 
 
+def check_new_flights_are_named(d, raw_actions: list[dict], scen: dict) -> None:
+    """A flight the agent has to book must be named in the request.
+
+    "Move it to <date>" is satisfied by any flight that day, including tau2-bench's own inventory,
+    which the default database still holds: an agent that booked HAT115 instead of the NVA flight the
+    generator picked was answering the question as asked. Two cases already named the flight; this
+    makes it a property of the set rather than of whoever wrote the case."""
+    asked = scen["reason_for_call"] + " " + scen.get("task_instructions", "")
+    for a in raw_actions:
+        if a["name"] != "update_reservation_flights":
+            continue
+        rid = a["arguments"].get("reservation_id")
+        res = d.reservations.get(rid, {})
+        # A segment the reservation already holds is being kept, and keeping it needs no naming; a
+        # segment the agent has to pick out of the timetable does.
+        held = {f["flight_number"] for f in res.get("flights", [])}
+        for f in a["arguments"].get("flights", []):
+            fn = f.get("flight_number")
+            if fn and fn not in held and fn not in asked:
+                raise BuildError(f"expected action books {fn}, which the request never names")
+
+
 def name_payment_method(d, uid: str, raw_actions: list[dict], scen: dict) -> None:
     """Say which card to use whenever the account holds more than one.
 
@@ -1080,6 +1105,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     hid = False
     if history and case.history and uid in d.users:
         add_history(d, uid, rng)
+    check_new_flights_are_named(d, raw_actions, scen)
     name_payment_method(d, uid, raw_actions, scen)
     check_baggage_matches_rule(d, raw_actions)
     if case.validate:
