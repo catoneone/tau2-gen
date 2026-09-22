@@ -303,3 +303,17 @@ def compatible(names: tuple[str, ...]) -> bool:
             if frozenset({a, b}) in INCOMPATIBLE:
                 return False
     return True
+
+
+def unit_ceiling() -> int:
+    """How many distinct shapes the composable units can express, at the sizes the composer draws.
+
+    An upper bound on distinct decisions from composition, before the rule outcomes inside each unit
+    are counted, so the real ceiling is higher; what it bounds is how far more tasks can take you."""
+    import itertools
+    n = 0
+    for k in (2, 3):
+        for cand in itertools.combinations(sorted(UNITS), k):
+            if compatible(tuple(sorted(cand))) and set(cand) & ACTION_UNITS:
+                n += 1
+    return n

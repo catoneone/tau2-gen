@@ -50,6 +50,7 @@ from tau2.domains.telecom.user_data_model import NetworkModePreference  # noqa: 
 
 from common import db as dbgen  # noqa: E402
 from common import schema, user_sim  # noqa: E402
+from fidelity import reports  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 DOMAIN = "telecom"
@@ -468,7 +469,16 @@ def sample_composition(rng: random.Random, intent: str, k: int) -> Optional[tupl
 # 构造 + 验证
 # ---------------------------------------------------------------------------
 class BuildError(Exception):
-    pass
+    """A task that could not be built, or that a build-time guard rejected.
+
+    `guard` names the invariant that refused it, so the rejections can be reported per guard rather
+    than as one undifferentiated count: a guard that never fires is either redundant or broken, and a
+    guard that fires constantly is a case whose sampling is wrong."""
+
+    def __init__(self, message: str, guard: str = "case"):
+        super().__init__(message)
+        self.guard = guard
+
 
 
 def build_task(idx: int, tag: str, intent: str, comp: tuple[str, ...], persona_name: str, inst: dict, refuel_gb: float,
@@ -731,6 +741,10 @@ def main() -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
     print(json.dumps({k: manifest[k] for k in ("n", "intent_hist", "persona_hist", "n_faults_hist", "unfixable", "family_coverage", "refuel_hist")}, ensure_ascii=False))
     print(f"leakage ok={leak['ok']} gen_ids={leak['gen_counts']} bench_ids={leak['bench_counts']}")
+    # Telecom composes atomic faults rather than rule units, so its ceiling is the benchmark's own
+    # enumeration, reported by the leakage check rather than by a unit table.
+    for p in reports.write_all(out):
+        print(f"wrote {p}")
     print(f"wrote {out}/{{tasks.jsonl,tasks_tau2.json,meta.jsonl,manifest.json,sample.jsonl,taskset.toml}}")
 
 

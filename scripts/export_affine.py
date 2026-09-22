@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from common.tau2_compat import TAU2_DOMAIN_DATA, repo_commit, require_tau2, tau2_commit  # noqa: E402
+from fidelity import reports  # noqa: E402
 
 require_tau2()
 
@@ -95,6 +96,9 @@ def main() -> None:
     ap.add_argument("--domain", default="telecom", choices=["telecom", "airline", "retail"])
     ap.add_argument("--out", required=True)
     ap.add_argument("--manifest", default=None, help="the run's manifest.json (seed, commits, leakage) — recorded in the export")
+    ap.add_argument("--reports-dir", default=None,
+                    help="the generated set's directory, so the guard and composition reports travel "
+                         "with the export (defaults to the tasks file's directory)")
     ap.add_argument("--exclude-split", default="base",
                     help="τ² split whose ids must not appear in the export (default base = the benchmark tasks); '' to skip")
     ap.add_argument("--name-prefix", default="tau2g-")
@@ -140,6 +144,13 @@ def main() -> None:
     without_db = sum(1 for t in tasks if not ((t.get("initial_state") or {}).get("initialization_data")))
     records = [to_affine_record(t, i, a.domain, a.name_prefix, a.system_prompt) for i, t in enumerate(tasks)]
     manifest = json.loads(Path(a.manifest).read_text()) if a.manifest else None
+    # The guards and the composition are properties of the set, so they ship with it rather than being
+    # scraped back out of manifest.json.stats by whoever consumes it.
+    rdir = Path(a.reports_dir) if a.reports_dir else Path(a.tasks).parent
+    try:
+        set_reports = reports.summary(rdir)
+    except (FileNotFoundError, KeyError) as e:
+        set_reports = {"unavailable": f"{type(e).__name__}: {e}", "looked_in": str(rdir)}
     out = {
         "schema": SCHEMA,
         "domain": a.domain,
@@ -149,6 +160,7 @@ def main() -> None:
             "held_out_split": a.exclude_split or None, "held_out_ids_checked": len(held),
             "reward_basis_override": a.reward_basis, "require_communicate_info": a.require_communicate_info,
             "dropped_held_out_compositions": dropped_comp,
+            "reports": set_reports,
         },
         "n": len(records),
         "n_without_initialization_data": without_db,

@@ -36,6 +36,7 @@ require_tau2()
 from tau2.data_model.tasks import InitializationData  # noqa: E402
 
 from common import schema, user_sim  # noqa: E402
+from fidelity import reports  # noqa: E402
 from domains.airline import db as adb  # noqa: E402
 from domains.airline import units as U  # noqa: E402
 from domains.airline.rules import AirlineRules  # noqa: E402
@@ -49,7 +50,16 @@ READ_TOOLS = {"get_user_details", "get_reservation_details", "search_direct_flig
 
 
 class BuildError(Exception):
-    pass
+    """A task that could not be built, or that a build-time guard rejected.
+
+    `guard` names the invariant that refused it, so the rejections can be reported per guard rather
+    than as one undifferentiated count: a guard that never fires is either redundant or broken, and a
+    guard that fires constantly is a case whose sampling is wrong."""
+
+    def __init__(self, message: str, guard: str = "case"):
+        super().__init__(message)
+        self.guard = guard
+
 
 
 # --------------------------------------------------------------------------------------
@@ -290,7 +300,7 @@ def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str]
         exempt = set(REASON_ANCHOR.values())
         for a in given:
             if a not in exempt and a not in request:
-                raise BuildError(f"topic anchor {a!r} is absent from the composed request")
+                raise BuildError(f"topic anchor {a!r} is absent from the composed request", "anchor_in_request")
             if a not in out:
                 out.append(a)
         return out or None
@@ -304,7 +314,8 @@ def communicate_info(case_name: str, dec, scen: dict | None = None) -> list[str]
         # appeared only in the instructions, so this check had waved it through.
             request = (scen.get("reason_for_call") or "").lower()
             if a not in request:
-                raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request")
+                raise BuildError(f"topic anchor {a!r} for {case_name} is absent from the user's request",
+                                 "anchor_in_request")
         out.append(a)
     r = REASON_ANCHOR.get(getattr(dec, "reason", None))
     if r and r not in out:
@@ -875,6 +886,10 @@ def case_composed(rng):
         "task_instructions": user_sim.instructions(rng, n=2, core=" ".join(constraints)),
         "_anchors": anchors,
         "_units": list(names),
+        # Which branch each unit's rule actually took, so a composed task's decision identity is the
+        # outcomes and not just the unit names: cancel_ok firing `cabin_business` is a different
+        # decision from cancel_ok firing `within_24h`.
+        "_unit_reasons": [getattr(r.dec, "reason", None) for _, r in results],
     }
     return d, uid, results[0][1].rid, reads + writes, nl, scenario
 
@@ -984,7 +999,7 @@ def check_itinerary_stays_in_order(raw_actions: list[dict]) -> None:
             continue
         dates = [f["date"] for f in a["arguments"].get("flights", [])]
         if dates != sorted(dates):
-            raise BuildError(f"expected itinerary is out of order: {dates}")
+            raise BuildError(f"expected itinerary is out of order: {dates}", "itinerary_order")
 
 
 def check_new_flights_are_named(d, raw_actions: list[dict], scen: dict) -> None:
@@ -1006,7 +1021,7 @@ def check_new_flights_are_named(d, raw_actions: list[dict], scen: dict) -> None:
         for f in a["arguments"].get("flights", []):
             fn = f.get("flight_number")
             if fn and fn not in held and fn not in asked:
-                raise BuildError(f"expected action books {fn}, which the request never names")
+                raise BuildError(f"expected action books {fn}, which the request never names", "flight_named")
 
 
 def name_payment_method(d, uid: str, raw_actions: list[dict], scen: dict) -> None:
@@ -1070,7 +1085,8 @@ def check_baggage_matches_rule(d, raw_actions: list[dict]) -> None:
             want = max(0, arg["total_baggages"] - free)
             if want != arg["nonfree_baggages"]:
                 raise BuildError(f"{rid}: {arg['total_baggages']} bags with {free} free means "
-                                 f"{want} paid, expected action says {arg['nonfree_baggages']}")
+                                 f"{want} paid, expected action says {arg['nonfree_baggages']}",
+                                 "baggage_matches_rule")
 
 
 def check_all_cancellable_are_expected(d, uid: str, raw_actions: list[dict]) -> None:
@@ -1084,7 +1100,7 @@ def check_all_cancellable_are_expected(d, uid: str, raw_actions: list[dict]) -> 
                if R.can_cancel(d.delta(), d.reservations[rid], "other").allowed}
     expected = {a["arguments"]["reservation_id"] for a in raw_actions if a["name"] == "cancel_reservation"}
     if allowed != expected:
-        raise BuildError(f"cancellable set {sorted(allowed)} != expected {sorted(expected)}")
+        raise BuildError(f"cancellable set {sorted(allowed)} != expected {sorted(expected)}", "cancel_set_closed")
 
 
 CASES = [
@@ -1136,6 +1152,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
         hid = rid not in scen["reason_for_call"]
     persona_text = user_sim.render_persona(persona_name, rng, "555-555-0100") if persona_name != "None" else None
     units = scen.pop("_units", None)
+    unit_reasons = scen.pop("_unit_reasons", None)
     label = f"composed:{'+'.join(units)}" if units else case.name
     name = f"[{label}][PERSONA:{persona_name}][GEN:{tag}]"
     writes = [a for a in raw_actions if a["name"] not in
@@ -1160,7 +1177,9 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
         tau_description=schema.TauDescription(purpose=case.name.replace("_", " "), relevant_policies=None, notes=None),
     ).to_dict()
     data["evaluation_criteria"]["env_assertions"] = None
+    reasons = sorted({r for r in (unit_reasons or [getattr(dec, "reason", None)]) if r})
     meta = {"idx": idx, "id": name, "case": case.name, "group": case.group, "persona": persona_name,
+            "rule_reasons": reasons,
             "communicate_info": communicate_info(case.name, dec, scen), "units": units, "unknown_id": hid, "n_user_records": len(d.users.get(uid, {}).get("reservations", [])),
             "n_writes": len(writes), "write_names": sorted({a["name"] for a in writes}),
             "user_id": uid, "reservation_id": rid, "delta_bytes": len(json.dumps(d.delta()))}
@@ -1226,8 +1245,25 @@ def rebalance(cases: list, refuse_share: float | None) -> list[float]:
     return w
 
 
+# `composed` carries no row of its own: its must-mention strings come from the units it drew, each of
+# which reports its own anchor.
+ANCHOR_EXEMPT = {"composed"}
+
+
+def check_every_case_has_an_anchor() -> None:
+    """A case with no anchor emits an empty communicate_info, and an empty one scores 1.0.
+
+    That is the hole 521ca0f closed, and adding two cases without their rows reopened it: 13 of 150
+    refusals would have passed on silence. Checking the table against the case list costs nothing and
+    does not depend on anyone remembering."""
+    missing = sorted(c.name for c in CASES if c.name not in TOPIC_ANCHOR and c.name not in ANCHOR_EXEMPT)
+    if missing:
+        raise SystemExit(f"cases with no TOPIC_ANCHOR row: {missing}")
+
+
 def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = None,
              unknown_id_share: float = 0.10, verbose: bool = False) -> tuple[list[dict], list[dict], dict]:
+    check_every_case_has_an_anchor()
     rng = random.Random(seed)
     weights = rebalance(CASES, refuse_share)
     left = quotas(n, weights)
@@ -1252,6 +1288,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
                                     history=True, unknown_id=rng.random() < unknown_id_share)
         except BuildError as e:
             stats[f"build_fail:{case.name}"] += 1
+            stats[f"guard_reject:{getattr(e, 'guard', 'case')}:{case.name}"] += 1
             if verbose:
                 print(f"build fail {case.name}: {e}", file=sys.stderr)
             continue
@@ -1325,6 +1362,11 @@ def main() -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
     print(json.dumps({k: manifest[k] for k in ("n", "group_hist", "no_write_tasks", "write_names", "median_delta_bytes")}, ensure_ascii=False))
     print(f"leakage ok={leak['ok']}")
+    ceiling = U.unit_ceiling() + sum(1 for c in CASES if c.name != "composed")
+    for p in reports.write_all(out, ceiling,
+                               f"{U.unit_ceiling()} composable shapes at k=2,3 plus "
+                               f"{sum(1 for c in CASES if c.name != 'composed')} single-rule cases"):
+        print(f"wrote {p}")
     print(f"wrote {out}")
 
 

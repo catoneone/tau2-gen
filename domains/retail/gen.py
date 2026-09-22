@@ -37,6 +37,7 @@ require_tau2()
 from tau2.data_model.tasks import InitializationData  # noqa: E402
 
 from common import schema, user_sim  # noqa: E402
+from fidelity import reports  # noqa: E402
 from domains.retail import db as rdb  # noqa: E402
 from domains.retail import units as U  # noqa: E402
 
@@ -101,7 +102,16 @@ CANCEL_REASONS = ["no longer needed", "ordered by mistake"]
 
 
 class BuildError(Exception):
-    pass
+    """A task that could not be built, or that a build-time guard rejected.
+
+    `guard` names the invariant that refused it, so the rejections can be reported per guard rather
+    than as one undifferentiated count: a guard that never fires is either redundant or broken, and a
+    guard that fires constantly is a case whose sampling is wrong."""
+
+    def __init__(self, message: str, guard: str = "case"):
+        super().__init__(message)
+        self.guard = guard
+
 
 
 class Case:
@@ -817,6 +827,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
                                     judge=judge, gate_communicate=gate_communicate)
         except BuildError as e:
             stats[f"build_fail:{case.name}"] += 1
+            stats[f"guard_reject:{getattr(e, 'guard', 'case')}:{case.name}"] += 1
             if verbose:
                 print(f"build fail {case.name}: {e}", file=sys.stderr)
             continue
@@ -896,6 +907,11 @@ def main() -> None:
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False))
     print(json.dumps({k: manifest[k] for k in ("n", "group_hist", "no_write_tasks", "write_names", "median_delta_bytes")}, ensure_ascii=False))
     print(f"leakage ok={leak['ok']}")
+    ceiling = U.unit_ceiling() + sum(1 for c in CASES if c.name != "composed")
+    for p in reports.write_all(out, ceiling,
+                               f"{U.unit_ceiling()} composable shapes at k=2,3 plus "
+                               f"{sum(1 for c in CASES if c.name != 'composed')} single-rule cases"):
+        print(f"wrote {p}")
     print(f"wrote {out}")
 
 
