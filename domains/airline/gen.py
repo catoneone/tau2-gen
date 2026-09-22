@@ -966,6 +966,44 @@ def case_compensation_facts_denied(rng):
     return d, uid, rid, _read_actions(uid, rid) + _status_reads(d, rid), [dec.detail], scenario
 
 
+def name_payment_method(d, uid: str, raw_actions: list[dict], scen: dict) -> None:
+    """Say which card to use whenever the account holds more than one.
+
+    Every write that moves money takes a payment_id, the expected action names one, and the database
+    check compares payment history, so a customer holding both a credit card and a gift card gives the
+    task two correct answers. The agent that picked the other one was right and scored zero. policy.md
+    only requires the method to be in the profile, so the request is what has to pin it down."""
+    pids: list[str] = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == "payment_id" and isinstance(v, str):
+                    pids.append(v)
+                else:
+                    walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(raw_actions)
+    methods = d.users.get(uid, {}).get("payment_methods", {})
+    if not pids or len(methods) < 2:
+        return
+    phrases = []
+    for pid in dict.fromkeys(pids):
+        m = methods.get(pid)
+        if not m:
+            continue
+        if m["source"] == "credit_card":
+            phrases.append(f"your {m['brand']} card ending {m['last_four']}")
+        else:
+            phrases.append(f"your {m['source'].replace('_', ' ')} ending {pid[-4:]}")
+    if phrases:
+        scen["task_instructions"] = (scen["task_instructions"].rstrip() + " Pay with "
+                                     + " and ".join(phrases) + ".")
+
+
 def check_baggage_matches_rule(d, raw_actions: list[dict]) -> None:
     """Every expected baggage write must agree with the allowance as it stands at that point.
 
@@ -1042,6 +1080,7 @@ def build_task(idx: int, tag: str, case: Case, persona_name: str, rng: random.Ra
     hid = False
     if history and case.history and uid in d.users:
         add_history(d, uid, rng)
+    name_payment_method(d, uid, raw_actions, scen)
     check_baggage_matches_rule(d, raw_actions)
     if case.validate:
         case.validate(d, uid, raw_actions)
