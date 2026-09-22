@@ -1230,6 +1230,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
     rng = random.Random(seed)
     weights = rebalance(CASES, refuse_share)
     left = quotas(n, weights)
+    pressure_plan = user_sim.plan_pressure(n, 0.40, rng)
     records, metas, stats = [], [], Counter()
     idx = 0
     attempts = 0
@@ -1244,6 +1245,7 @@ def generate(n: int, seed: int, persona_mix: dict, refuse_share: float | None = 
         ci = rng.choices(avail, weights=[left[i] for i in avail], k=1)[0]
         case = CASES[ci]
         persona = user_sim.sample_persona(rng, persona_mix)
+        user_sim.PRESSURE_SHARE = 1.0 if pressure_plan[len(records)] else 0.0
         try:
             data, meta = build_task(idx, f"{seed}-{idx:05d}", case, persona, rng,
                                     history=True, unknown_id=rng.random() < unknown_id_share)

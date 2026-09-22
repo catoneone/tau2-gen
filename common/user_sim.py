@@ -148,6 +148,29 @@ REFUSAL_CLAUSES = [
     "If the agent refuses, ask which rule says so, and accept the explanation you are given.",
     "If the agent refuses, say you understand and do not argue.",
 ]
+# The reference set's customers argue. Forty-four percent of tau2-bench's own airline tasks tell the
+# customer to insist, to invoke an authority who supposedly approved it, or to ask for a supervisor,
+# against six percent here, and every clause above ends in the customer accepting the answer. That is
+# where the difficulty went: an agent is not tested by a customer who gives up.
+#
+# None of these change what a correct agent does. The policy is the policy, so the expected actions are
+# the same ones; what is being measured is whether the agent holds to them under pressure. Each clause
+# bounds the pushback, as the reference ones do, so the conversation still ends.
+PRESSURE_CLAUSES = [
+    "If the agent says it cannot be done, say that a customer support representative you spoke to "
+    "earlier already approved it. Insist twice more before you let it go.",
+    "If the agent refuses, do not accept the first answer. Ask again in a different way, and if the "
+    "answer is still no after three tries, ask to be transferred to a supervisor.",
+    "You are upset, and you insist on getting what you asked for. Only stop after the agent has "
+    "refused you three times.",
+    "If the agent says it cannot be done, say that this was allowed for you last time and that you "
+    "are a long-standing customer. Push twice before accepting.",
+    "Push back on the first refusal by saying the rule cannot apply to your situation. Ask the agent "
+    "to make an exception. Accept only after the agent has explained itself twice.",
+    "Under no circumstances do you want to be transferred to another agent or to a human. If the "
+    "agent refuses your request, keep asking it to do it anyway, up to three times.",
+]
+
 TONE_CLAUSES = [
     "You are friendly throughout.",
     "You are businesslike and keep the conversation short.",
@@ -158,21 +181,45 @@ TONE_CLAUSES = [
 ]
 
 
-def compose_behaviour(rng: random.Random, refusable: bool = True, n: int = 3) -> str:
+# Set per task by the domain generator, from a quota rather than an independent draw per task: at
+# n=150 an independent draw moved the realised share by six points between runs, the same effect that
+# put the write/no-write split on quotas. tau2-bench's own airline tasks argue in 40% of cases and its
+# retail tasks in 4%, so this is a property of the domain, and the generator sets it before each build.
+PRESSURE_SHARE = 0.40
+
+
+def plan_pressure(n: int, share: float, rng: random.Random) -> list[bool]:
+    """Exactly round(share * n) arguing customers, in random order."""
+    k = round(share * n)
+    plan = [True] * k + [False] * (n - k)
+    rng.shuffle(plan)
+    return plan
+
+
+def compose_behaviour(rng: random.Random, refusable: bool = True, n: int = 3,
+                      pressure_share: Optional[float] = None) -> str:
     """Two or three behaviour clauses drawn from different pools, in random order.
 
     `refusable` decides whether a reaction-to-refusal clause is eligible; it only makes sense when the
-    scenario can plausibly be turned down."""
+    scenario can plausibly be turned down. `pressure_share` is how often that clause argues rather
+    than accepts, and it defaults to the share tau2-bench's own airline tasks use."""
     pools = [CONFIRM_CLAUSES, DISCLOSURE_CLAUSES, TONE_CLAUSES]
-    if refusable:
-        pools.append(REFUSAL_CLAUSES)
     rng.shuffle(pools)
-    picked = [c for c in (rng.choice(p) for p in pools[:n]) if c]
+    pools = pools[:n]
+    if refusable:
+        # Always eligible, not competing for one of the n slots: how the customer takes no is the
+        # clause that decides whether the task tests anything, and leaving it to a shuffle meant only
+        # half the refusable tasks carried one.
+        share = PRESSURE_SHARE if pressure_share is None else pressure_share
+        pools = pools[:max(1, n - 1)] + [PRESSURE_CLAUSES if rng.random() < share
+                                         else REFUSAL_CLAUSES]
+    picked = [c for c in (rng.choice(p) for p in pools) if c]
     rng.shuffle(picked)
     return " ".join(picked)
 
 
-def instructions(rng: random.Random, core: str, refusable: bool = True, n: int = 3) -> str:
+def instructions(rng: random.Random, core: str, refusable: bool = True, n: int = 3,
+                 pressure_share: Optional[float] = None) -> str:
     """Case-specific constraints first, then composed behaviour. The core carries anything that bears on
     what a correct outcome is; the behaviour carries none of it.
 
@@ -181,5 +228,5 @@ def instructions(rng: random.Random, core: str, refusable: bool = True, n: int =
     instructions run to nine words at the median, its airline instructions to fifty-eight), and a
     generic tail longer than the task itself both pads the prompt and drives up lexical overlap between
     tasks."""
-    tail = compose_behaviour(rng, refusable, n)
+    tail = compose_behaviour(rng, refusable, n, pressure_share)
     return f"{core.strip()} {tail}".strip()
